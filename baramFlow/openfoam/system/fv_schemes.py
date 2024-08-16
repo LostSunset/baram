@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-
+from baramFlow.coredb.material_db import MaterialDB
+from baramFlow.coredb.models_db import ModelsDB
+from baramFlow.coredb.region_db import RegionDB
 from libbaram.openfoam.dictionary.dictionary_file import DictionaryFile
 
 from baramFlow.coredb.coredb_reader import CoreDBReader
@@ -17,6 +19,7 @@ class FvSchemes(DictionaryFile):
         self._rname = rname
         self._db = CoreDBReader()
         self._cap = None
+        self._mid = RegionDB.getMaterial(self._rname)
 
     def build(self):
         if self._data is not None:
@@ -25,8 +28,7 @@ class FvSchemes(DictionaryFile):
         solver = findSolver()
         self._cap = getSolverCapability(solver)
 
-        mid = self._db.getValue(f'.//region[name="{self._rname}"]/material')
-        phase = self._db.getValue(f'.//materials/material[@mid="{mid}"]/phase')
+        phase = MaterialDB.getPhase(self._mid)
 
         if solver == 'TSLAeroFoam':
             self._generateTSLAero()
@@ -102,14 +104,6 @@ class FvSchemes(DictionaryFile):
             }
         }
 
-        scheme = (
-            'Gauss upwind'
-            if self._db.getValue(f'{NumericalDB.NUMERICAL_CONDITIONS_XPATH}/discretizationSchemes/scalar') == 'firstOrderUpwind'
-            else 'Gauss linearUpwind momentumReconGrad')
-
-        if self._cap['timeSteady'] and not self._cap['timeTransient']:
-            self._data['divSchemes'][f'div(phi,scalar)'] = 'bounded ' + scheme
-
     def _generateFluid(self):
         self._data = {
             'ddtSchemes': self._constructDdtSchemes(),
@@ -163,8 +157,8 @@ class FvSchemes(DictionaryFile):
         return {
             'default': 'Gauss linear',
             'momentumReconGrad':   'VKLimited Gauss linear 1.0',
-            'energyReconGrad':     'BJLimited Gauss linear 1.0',
-            'turbulenceReconGrad': 'BJLimited Gauss linear 1.0'
+            'energyReconGrad':     'VKLimited Gauss linear 1.0',
+            'turbulenceReconGrad': 'VKLimited Gauss linear 1.0'
         }
 
     def _constructDivSchemes(self):
@@ -239,10 +233,6 @@ class FvSchemes(DictionaryFile):
                     'div(phid_pos,p)': f'{bounded}Gauss Minmod'
                 })
 
-        # unlike other values, do not add 'bounded' for species schemes even for steady state solvers
-        if speciesModel != 'off':
-            pass  # Not implemented yet
-
         if multiphaseModel != 'off':
             if volumeFraction == 'firstOrderUpwind':
                 divSchemes.update({
@@ -256,9 +246,18 @@ class FvSchemes(DictionaryFile):
                 })
 
         if self._db.getValue(f'{NumericalDB.NUMERICAL_CONDITIONS_XPATH}/discretizationSchemes/scalar') == 'firstOrderUpwind':
-            divSchemes[f'div(phi,scalar)'] = f'{bounded}Gauss upwind'
+            divSchemes['div(phi,scalar)'] = f'Gauss upwind'
         else:
-            divSchemes[f'div(phi,scalar)'] = f'{bounded}Gauss linearUpwind momentumReconGrad'
+            divSchemes['div(phi,scalar)'] = f'Gauss linearUpwind momentumReconGrad'
+
+        if ModelsDB.isSpeciesModelOn():
+            if self._db.getValue(f'{NumericalDB.NUMERICAL_CONDITIONS_XPATH}/discretizationSchemes/species') == 'firstOrderUpwind':
+                speciesDivSchemes = f'Gauss upwind'
+            else:
+                speciesDivSchemes = f'Gauss linearUpwind momentumReconGrad'
+
+            for specie in MaterialDB.getSpecies(self._mid).values():
+                divSchemes[f'div(phi,{specie})'] = speciesDivSchemes
 
         return divSchemes
 

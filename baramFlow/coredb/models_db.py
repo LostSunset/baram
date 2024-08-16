@@ -1,13 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from dataclasses import dataclass
 from enum import Enum, auto
 
 from PySide6.QtCore import QCoreApplication
 
 from baramFlow.coredb import coredb
-from baramFlow.coredb.cell_zone_db import SpecificationMethod
 
 
 class IndexedEnum(Enum):
@@ -105,24 +103,6 @@ class TurbulenceFields(Enum):
     EPSILON = auto()
     OMEGA = auto()
     NU_TILDA = auto()
-
-
-class ScalarSpecificationMethod(Enum):
-    CONSTANT = 'constant'
-    TURBULENT_VISCOSITY = 'turbulentViscosity'
-    LAMINAR_AND_TURBULENT_VISCOSITY = 'laminarAndTurbulentViscosity'
-
-
-@dataclass
-class UserDefinedScalar:
-    scalarID: int
-    fieldName: str
-    region: int
-    material: int
-    specificationMethod: ScalarSpecificationMethod
-    constantDiffusivity: str
-    laminarViscosityCoefficient: str
-    turbulentViscosityCoefficient: str
 
 
 class ModelsDB:
@@ -237,98 +217,3 @@ class TurbulenceField:
 
     def getLabelText(self):
         return f'{self._symbol} ({self._unit})'
-
-
-class TurbulenceModelHelper:
-    _modelFields = {
-        TurbulenceModel.INVISCID: [],
-        TurbulenceModel.LAMINAR: [],
-        TurbulenceModel.SPALART_ALLMARAS: [TurbulenceFields.NU_TILDA],
-        TurbulenceModel.K_EPSILON: [TurbulenceFields.K, TurbulenceFields.EPSILON],
-        TurbulenceModel.K_OMEGA: [TurbulenceFields.K, TurbulenceFields.OMEGA],
-        TurbulenceModel.LES: [],
-    }
-
-    _fields = {
-        TurbulenceFields.K:
-            TurbulenceField(TurbulenceFields.K,
-                            'k',
-                            'm<sup>2</sup>/s<sup>2</sup>',
-                            {
-                                SpecificationMethod.VALUE_PER_UNIT_VOLUME: '1/ms<sup>3</sup>',
-                                SpecificationMethod.VALUE_FOR_ENTIRE_CELL_ZONE: 'm<sup>2</sup>/s<sup>3</sup>'
-                            },
-                            'turbulentKineticEnergy'),
-        TurbulenceFields.EPSILON:
-            TurbulenceField(TurbulenceFields.EPSILON,
-                            'ε',
-                            'm<sup>2</sup>/s<sup>3</sup>',
-                            {
-                                SpecificationMethod.VALUE_PER_UNIT_VOLUME: '1/m<sup>2</sup>s<sup>4</sup>',
-                                SpecificationMethod.VALUE_FOR_ENTIRE_CELL_ZONE: 'm<sup>2</sup>/s<sup>4</sup>'
-                            }, 'turbulentDissipationRate'),
-        TurbulenceFields.OMEGA:
-            TurbulenceField(TurbulenceFields.OMEGA,
-                            'ω',
-                            '1/s',
-                            {
-                                SpecificationMethod.VALUE_PER_UNIT_VOLUME: '1/m<sup>3</sup>s<sup>2</sup>',
-                                SpecificationMethod.VALUE_FOR_ENTIRE_CELL_ZONE: '1/s<sup>2</sup>'
-                            },
-                            'specificDissipationRate'),
-        TurbulenceFields.NU_TILDA:
-            TurbulenceField(TurbulenceFields.NU_TILDA,
-                            'ν',
-                            'm<sup>2</sup>/s',
-                            {
-                                SpecificationMethod.VALUE_PER_UNIT_VOLUME: '1/ms<sup>2</sup>',
-                                SpecificationMethod.VALUE_FOR_ENTIRE_CELL_ZONE: 'm<sup>2</sup>/s<sup>2</sup>'
-                            },
-                            'modifiedTurbulentViscosity'),
-    }
-
-    @classmethod
-    def getFields(cls):
-        return [cls._fields[f] for f in cls._modelFields[ModelsDB.getTurbulenceModel()]]
-
-
-class UserDefinedScalarsDB:
-    SCALAR_XPATH = 'models/userDefinedScalars'
-
-    @classmethod
-    def hasDefined(cls):
-        return len(coredb.CoreDB().getUserDefinedScalars()) > 0
-
-    @classmethod
-    def getXPath(cls, scalarID):
-        return f'{cls.SCALAR_XPATH}/scalar[@scalarID="{scalarID}"]'
-
-    @classmethod
-    def getFieldName(cls, scalarID):
-        return coredb.CoreDB().getValue(f'{cls.SCALAR_XPATH}/scalar[@scalarID="{scalarID}"]/fieldName')
-
-    @classmethod
-    def getRegion(cls, scalarID):
-        return coredb.CoreDB().getValue(f'{cls.SCALAR_XPATH}/scalar[@scalarID="{scalarID}"]/region')
-
-    @classmethod
-    def getUserDefinedScalar(cls, scalarID):
-        db = coredb.CoreDB()
-        xpath = cls.getXPath(scalarID)
-
-        return UserDefinedScalar(
-            scalarID=scalarID,
-            fieldName=db.getValue(xpath + '/fieldName'),
-            region=db.getValue(xpath + '/region'),
-            material=db.getValue(xpath + '/material'),
-            specificationMethod=ScalarSpecificationMethod(db.getValue(xpath + '/diffusivity/specificationMethod')),
-            constantDiffusivity=db.getValue(xpath + '/diffusivity/constant'),
-            laminarViscosityCoefficient=db.getValue(
-                xpath + '/diffusivity/laminarAndTurbulentViscosity/laminarViscosityCoefficient'),
-            turbulentViscosityCoefficient=db.getValue(
-                xpath + '/diffusivity/laminarAndTurbulentViscosity/turbulentViscosityCoefficient')
-        )
-
-    @classmethod
-    def isReferenced(cls, scalarID):
-        return int(scalarID) and coredb.CoreDB().exists(f'monitors/*/*/field[field="scalar"][fieldID="{scalarID}"]')

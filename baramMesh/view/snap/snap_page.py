@@ -41,8 +41,8 @@ class SnapPage(StepPage):
         try:
             db = app.db.checkout('snap')
 
-            db.setValue('nSmoothPatch', self._ui.smootingForSurface.text(), self.tr('Smoothing for Surface'))
-            db.setValue('nSmoothInternal', self._ui.smootingForInternal.text(), self.tr('Smoothing for Internal'))
+            db.setValue('nSmoothPatch', self._ui.smoothingForSurface.text(), self.tr('Smoothing for Surface'))
+            db.setValue('nSmoothInternal', self._ui.smoothingForInternal.text(), self.tr('Smoothing for Internal'))
             db.setValue('nSolveIter', self._ui.meshDisplacementRelaxation.text(),
                         self.tr('Mesh Displacement Relaxation'))
             db.setValue('nRelaxIter', self._ui.globalSnappingRelaxation.text(), self.tr('Global Snapping Relaxation'))
@@ -69,8 +69,8 @@ class SnapPage(StepPage):
 
     def _load(self):
         dbElement = app.db.checkout('snap')
-        self._ui.smootingForSurface.setText(dbElement.getValue('nSmoothPatch'))
-        self._ui.smootingForInternal.setText(dbElement.getValue('nSmoothInternal'))
+        self._ui.smoothingForSurface.setText(dbElement.getValue('nSmoothPatch'))
+        self._ui.smoothingForInternal.setText(dbElement.getValue('nSmoothInternal'))
         self._ui.meshDisplacementRelaxation.setText(dbElement.getValue('nSolveIter'))
         self._ui.globalSnappingRelaxation.setText(dbElement.getValue('nRelaxIter'))
         self._ui.featureSnappingRelaxation.setText(dbElement.getValue('nFeatureSnapIter'))
@@ -115,7 +115,7 @@ class SnapPage(StepPage):
             await self._cm.start()
             rc = await self._cm.wait()
             if rc != 0:
-                raise ProcessError
+                raise ProcessError(rc)
 
             if app.db.elementCount('region') > 1:
                 TopoSetDict().build(TopoSetDict.Mode.CREATE_REGIONS).write()
@@ -126,7 +126,7 @@ class SnapPage(StepPage):
                 await self._cm.start()
                 rc = await self._cm.wait()
                 if rc != 0:
-                    raise ProcessError
+                    raise ProcessError(rc)
 
                 if app.db.elementCount('geometry', lambda i, e: e['cfdType'] == CFDType.CELL_ZONE.value):
                     snapDict.updateForCellZoneInterfacesSnap().write()
@@ -137,7 +137,7 @@ class SnapPage(StepPage):
                     await self._cm.start()
                     rc = await self._cm.wait()
                     if rc != 0:
-                        raise ProcessError
+                        raise ProcessError(rc)
 
             self._cm = RunParallelUtility('checkMesh', '-allRegions', '-writeFields', '(cellAspectRatio cellVolume nonOrthoAngle skewness)', '-time', str(self.OUTPUT_TIME), '-case', app.fileSystem.caseRoot(),
                                     cwd=app.fileSystem.caseRoot(), parallel=app.project.parallelEnvironment())

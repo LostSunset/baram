@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import qasync
+from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import QDialog
 
 from libbaram.simple_db.simple_schema import DBError
@@ -38,6 +39,12 @@ class VolumeRefinementDialog(QDialog):
             GapRefinementMode.INSIDE:   self.tr('Inside'),
             GapRefinementMode.OUTSIDE:  self.tr('Outside'),
         })
+
+        self._xCellSize = None
+        self._yCellSize = None
+        self._zCellSize = None
+
+        self._ui.volumeRefinementLevel.setValidator(QIntValidator(0, 100))
 
         self._connectSignalsSlots()
 
@@ -113,16 +120,15 @@ class VolumeRefinementDialog(QDialog):
                 else:
                     volumes[gId] = self._groupId
 
-            geometryManager = app.window.geometryManager
             for gId, group in volumes.items():
                 self._db.setValue(f'geometry/{gId}/castellationGroup', group)
-                geometryManager.updateGeometryProperty(gId, 'castellationGroup', group)
 
             super().accept()
         except DBError as error:
             await AsyncMessageBox().information(self, self.tr('Input Error'), error.toMessage())
 
     def _connectSignalsSlots(self):
+        self._ui.volumeRefinementLevel.editingFinished.connect(self._updateCellSize)
         self._ui.select.clicked.connect(self._selectVolumes)
         self._ui.ok.clicked.connect(self._accept)
         self._ui.cancel.clicked.connect(self.close)
@@ -149,15 +155,15 @@ class VolumeRefinementDialog(QDialog):
 
         self._volumes = []
         self._availableVolumes = []
-        for gId, geometry in app.window.geometryManager.geometries().items():
-            if geometry['gType'] != GeometryType.VOLUME.value:
+        for gId, geometry in self._db.getElements('geometry').items():
+            if geometry.value('gType') != GeometryType.VOLUME.value:
                 continue
 
             if app.window.geometryManager.isBoundingHex6(gId):
                 continue
 
-            name = geometry['name']
-            groupId = geometry['castellationGroup']
+            name = geometry.value('name')
+            groupId = geometry.value('castellationGroup')
             if groupId is None:
                 self._availableVolumes.append(SelectorItem(name, name, gId))
             elif groupId == self._groupId:
@@ -167,13 +173,36 @@ class VolumeRefinementDialog(QDialog):
 
         self._oldVolumes = self._volumes
 
+        self._loadCellSize()
+
+    def _loadCellSize(self):
+        gId, geometry = app.window.geometryManager.getBoundingHex6()
+        if geometry is None:
+            x1, x2, y1, y2, z1, z2 = app.window.geometryManager.getBounds().toTuple()
+        else:
+            x1, y1, z1 = geometry.vector('point1')
+            x2, y2, z2 = geometry.vector('point2')
+
+        self._xCellSize = (x2 - x1) / app.db.getFloat('baseGrid/numCellsX')
+        self._yCellSize = (y2 - y1) / app.db.getFloat('baseGrid/numCellsY')
+        self._zCellSize = (z2 - z1) / app.db.getFloat('baseGrid/numCellsZ')
+
+        self._updateCellSize()
+
+    def _updateCellSize(self):
+        d = 2 ** int(self._ui.volumeRefinementLevel.text())
+        self._ui.cellSize.setText(
+            'cell size <b>({:g} x {:g} x {:g})</b>'.format(
+                self._xCellSize / d, self._yCellSize / d, self._zCellSize / d))
+
     def _selectVolumes(self):
         self._dialog = MultiSelectorDialog(self, self.tr('Select Volumes'), self._availableVolumes, self._volumes)
         self._dialog.itemsSelected.connect(self._setVolumes)
         self._dialog.open()
 
-    def _setVolumes(self, gIds):
-        self._volumes = gIds
+    def _setVolumes(self, items):
+        self._volumes = []
         self._ui.volumes.clear()
-        for gId in gIds:
-            self._ui.volumes.addItem(app.window.geometryManager.geometry(gId)['name'])
+        for gId, name in items:
+            self._volumes.append(gId)
+            self._ui.volumes.addItem(name)

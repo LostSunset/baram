@@ -24,8 +24,12 @@ class PressureOutletDialog(ResizableDialog):
         self._ui = Ui_PressureOutletDialog()
         self._ui.setupUi(self)
 
-        self._db = coredb.CoreDB()
         self._xpath = BoundaryDB.getXPath(bcid)
+
+        self._turbulenceWidget = None
+        self._volumeFractionWidget = None
+        self._scalarsWidget = None
+        self._speciesWidget = None
 
         layout = self._ui.calculateBackflow.layout()
         rname = BoundaryDB.getBoundaryRegion(bcid)
@@ -34,11 +38,14 @@ class PressureOutletDialog(ResizableDialog):
         self._scalarsWidget = ConditionalWidgetHelper.userDefinedScalarsWidget(rname, layout)
 
         mid = RegionDB.getMaterial(rname)
+        self._speciesWidget = ConditionalWidgetHelper.speciesWidget(mid, layout)
+
+        db = coredb.CoreDB()
         xpath = MaterialDB.getXPath(mid)
         if (not ModelsDB.isEnergyModelOn()
                 or MaterialDB.getPhase(mid) == Phase.SOLID
-                or self._db.getValue(xpath + '/density/specification') != Specification.PERFECT_GAS.value
-                or self._db.getValue(xpath + '/specificHeat/specification') != Specification.CONSTANT.value):
+                or db.getValue(xpath + '/density/specification') != Specification.PERFECT_GAS.value
+                or db.getValue(xpath + '/specificHeat/specification') != Specification.CONSTANT.value):
             self._ui.NRB.hide()
 
             if not ModelsDB.isEnergyModelOn():
@@ -72,11 +79,13 @@ class PressureOutletDialog(ResizableDialog):
                 writer.append(xpath + '/backflowTotalTemperature',
                               self._ui.backflowTotalTemperature.text(), self.tr("Backflow Total Temperature"))
 
-
             if not await self._volumeFractionWidget.appendToWriter(writer, self._xpath + '/volumeFractions'):
                 return
 
             if not self._scalarsWidget.appendToWriter(writer, self._xpath + '/userDefinedScalars'):
+                return
+
+            if not await self._speciesWidget.appendToWriter(writer, self._xpath + '/species'):
                 return
         else:
             writer.append(xpath + '/calculatedBackflow', "false", None)
@@ -88,16 +97,18 @@ class PressureOutletDialog(ResizableDialog):
             self.accept()
 
     def _load(self):
+        db = coredb.CoreDB()
         xpath = self._xpath + self.RELATIVE_XPATH
 
-        self._ui.totalPressure.setText(self._db.getValue(xpath + '/totalPressure'))
+        self._ui.totalPressure.setText(db.getValue(xpath + '/totalPressure'))
 
-        self._ui.calculateBackflow.setChecked(self._db.getValue(xpath + '/calculatedBackflow') == "true")
+        self._ui.calculateBackflow.setChecked(db.getValue(xpath + '/calculatedBackflow') == "true")
         self._turbulenceWidget.load()
-        self._ui.nonReflectingBoundary.setChecked(self._db.getValue(xpath + '/nonReflective') == 'true')
-        self._ui.backflowTotalTemperature.setText(self._db.getValue(xpath + '/backflowTotalTemperature'))
+        self._ui.nonReflectingBoundary.setChecked(db.getValue(xpath + '/nonReflective') == 'true')
+        self._ui.backflowTotalTemperature.setText(db.getValue(xpath + '/backflowTotalTemperature'))
         self._volumeFractionWidget.load(self._xpath + '/volumeFractions')
         self._scalarsWidget.load(self._xpath + '/userDefinedScalars')
+        self._speciesWidget.load(self._xpath + '/species')
 
     def _connectSignalsSlots(self):
         self._ui.ok.clicked.connect(self._accept)

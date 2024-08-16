@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 
 from lxml import etree
+import pandas as pd
 
 from resources import resource
 
@@ -13,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 _ns = 'http://www.baramcfd.org/baram'
 _nsmap = {'': _ns}
+
+MATERIALS_PATH = 'materials.csv'
 
 
 def _addShowChartAndWriteIntervalV1(parent):
@@ -326,8 +329,8 @@ def _version_4(root: etree.Element):
 def _version_5(root: etree.Element):
     logger.debug('  Upgrading to v6')
 
-    # Keep this commented until official v6 spec. is released
-    # root.set('version', '6')
+    root.set('version', '6')
+
     for p in root.findall('models/turbulenceModels', namespaces=_nsmap):
         if p.find('des', namespaces=_nsmap) is None:
             logger.debug(f'    Adding "des" to {p}')
@@ -493,13 +496,150 @@ def _version_5(root: etree.Element):
             p.insert(1, e)
 
 
+def _version_6(root: etree.Element):
+    logger.debug('  Upgrading to v7')
+
+    root.set('version', '7')
+    if (p := root.find('numericalConditions/advanced', namespaces=_nsmap)) is not None:
+        if p.find('equations', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "equations" to {p}')
+
+            includeEnergyTerms = ('true'
+                                  if root.find('general/solverType', namespaces=_nsmap).text == 'densityBased'
+                                  else 'false')
+
+            e = etree.fromstring(
+                '<equations xmlns="http://www.baramcfd.org/baram">'
+                '   <flow>true</flow>'
+                '   <energy disabled="false">'
+                f'      <includeViscousDissipationTerms>{includeEnergyTerms}</includeViscousDissipationTerms>'
+                f'      <includeKineticEnergyTerms>{includeEnergyTerms}</includeKineticEnergyTerms>'
+                f'      <includePressureWorkTerms>{includeEnergyTerms}</includePressureWorkTerms>'
+                '   </energy>'
+                '   <UDS>true</UDS>'
+                '</equations>')
+            p.append(e)
+
+    df = pd.read_csv(resource.file(MATERIALS_PATH), header=0, index_col=0).transpose()
+    materialDB = df.where(pd.notnull(df), None).fillna(1).to_dict()
+
+    air = materialDB['aluminum']
+    for p in root.findall('materials/material', namespaces=_nsmap):
+        name = p.find('name', namespaces=_nsmap).text
+        properties = materialDB.get(name, air)
+
+        if p.find('type', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "type" to {p}')
+
+            e = etree.Element(f'{{{_ns}}}type')
+            e.text = 'nonmixture'
+            p.insert(1, e)
+
+        if p.find('phase', namespaces=_nsmap).text == 'gas':
+            if (density := p.find('density', namespaces=_nsmap)) is not None:
+                if density.find('pengRobinsonParameters', namespaces=_nsmap) is None:
+                    logger.debug(f'    Adding "pengRobinsonParameters" to {p}')
+
+                    e = etree.fromstring('<pengRobinsonParameters xmlns="http://www.baramcfd.org/baram">'
+                                         f' <criticalTemperature>{properties["criticalTemperature"]}</criticalTemperature>'
+                                         f' <criticalPressure>{properties["criticalPressure"]}</criticalPressure>'
+                                         f' <criticalSpecificVolume>'
+                                         f'     {round(1 / float(properties["criticalDensity"]), 4)}'
+                                         f' </criticalSpecificVolume>'
+                                         f' <acentricFactor>{properties["acentricFactor"]}</acentricFactor>'
+                                         '</pengRobinsonParameters>')
+                    density.append(e)
+
+    if (p := root.find('models/turbulenceModels', namespaces=_nsmap)) is not None:
+        if p.find('turbulentSchmidtNumber', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "turbulentSchmidtNumber" to {p}')
+
+            e = etree.Element(f'{{{_ns}}}turbulentSchmidtNumber')
+            e.text = '0.7'
+            p.append(e)
+
+    for p in root.findall('regions/region/cellZones/cellZone/fixedValues', namespaces=_nsmap):
+        if p.find('species', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "species" to {p}')
+
+            e = etree.Element(f'{{{_ns}}}species')
+            p.append(e)
+
+    for p in root.findall('regions/region/boundaryConditions/boundaryCondition', namespaces=_nsmap):
+        if p.find('species', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "species" to {p}')
+
+            e = etree.Element(f'{{{_ns}}}species')
+            p.append(e)
+
+    for p in root.findall('regions/region/initialization/initialValues', namespaces=_nsmap):
+        if p.find('species', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "species" to {p}')
+
+            e = etree.Element(f'{{{_ns}}}species')
+            p.append(e)
+
+    for p in root.findall('regions/region/initialization/advanced/sections/section', namespaces=_nsmap):
+        if p.find('species', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "species" to {p}')
+
+            e = etree.Element(f'{{{_ns}}}species')
+            p.insert(11, e)
+    #
+    # if (p := root.find('numericalConditions', namespaces=_nsmap)) is not None:
+    #     if p.find('species', namespaces=_nsmap) is None:
+    #         logger.debug(f'    Adding "species" to {p}')
+    #
+    #         e = etree.Element(f'{{{_ns}}}species')
+    #         p.insert(10, e)
+
+    if (p := root.find('numericalConditions/discretizationSchemes', namespaces=_nsmap)) is not None:
+        if p.find('species', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "species" to {p}')
+
+            e = etree.Element(f'{{{_ns}}}species')
+            e.text = 'firstOrderUpwind'
+            p.append(e)
+
+    if (p := root.find('numericalConditions/underRelaxationFactors', namespaces=_nsmap)) is not None:
+        if p.find('species', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "species, speciesFinal" to {p}')
+
+            e = etree.Element(f'{{{_ns}}}species')
+            e.text = '0.3'
+            p.append(e)
+
+            e = etree.Element(f'{{{_ns}}}speciesFinal')
+            e.text = '1'
+            p.append(e)
+
+    if (p := root.find('numericalConditions/convergenceCriteria', namespaces=_nsmap)) is not None:
+        if p.find('species', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "species" to {p}')
+
+            e = etree.fromstring(
+                '<species xmlns="http://www.baramcfd.org/baram">'
+                '   <absolute>0.001</absolute><relative>0.05</relative>'
+                '</species>')
+            p.append(e)
+
+    if (p := root.find('numericalConditions/advanced/equations', namespaces=_nsmap)) is not None:
+        if p.find('species', namespaces=_nsmap) is None:
+            logger.debug(f'    Adding "species" to {p}')
+
+            e = etree.Element(f'{{{_ns}}}species')
+            e.text = 'true'
+            p.append(e)
+
+
 _fTable = [
     None,
     _version_1,
     _version_2,
     _version_3,
     _version_4,
-    _version_5
+    _version_5,
+    _version_6
 ]
 
 currentVersion = int(etree.parse(resource.file('configurations/baram.cfg.xsd')).getroot().get('version'))
@@ -519,4 +659,3 @@ def migrate(root: etree.Element):
         for i in range(version, currentVersion):
             if i < len(_fTable):
                 _fTable[i](root)
-

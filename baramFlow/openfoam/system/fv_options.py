@@ -3,16 +3,16 @@
 
 import logging
 
+from baramFlow.coredb.region_db import RegionDB
 from libbaram.openfoam.dictionary.dictionary_file import DictionaryFile
 
 from baramFlow.coredb.cell_zone_db import CellZoneDB
 from baramFlow.coredb.coredb_reader import CoreDBReader
-from baramFlow.coredb.material_db import MaterialDB
+from baramFlow.coredb.material_db import MaterialDB, MaterialType
 from baramFlow.coredb.models_db import ModelsDB
 from baramFlow.openfoam.file_system import FileSystem
 
 logger = logging.getLogger(__name__)
-
 
 
 def generateSourceTermField(czname, xpath, fieldType):
@@ -104,6 +104,7 @@ def _generateInjectionRate(xpath, fieldType) -> dict:
             }
         }
     return data
+
 
 class FvOptions(DictionaryFile):
     def __init__(self, rname: str):
@@ -241,7 +242,7 @@ class FvOptions(DictionaryFile):
             self._data[dictName]['cellZone'] = czname
 
     def _generateSourceTerms(self, czname, xpath):
-        if ModelsDB.isMultiphaseModelOn():
+        if ModelsDB.isMultiphaseModelOn() or ModelsDB.isSpeciesModelOn():
             materials: [str] = self._db.getList(xpath+'/materials/materialSource/material')
             for mid in materials:
                 name = MaterialDB.getName(mid)
@@ -286,6 +287,13 @@ class FvOptions(DictionaryFile):
             self._generateFixedFields(czname, xpath + '/specificDissipationRate', 'omega')
         else:
             logger.debug('Error Model Type')
+
+        if ModelsDB.isSpeciesModelOn():
+            material = RegionDB.getMaterial(self._rname)
+            if MaterialDB.getType(material) == MaterialType.MIXTURE:
+                for mid, specie in MaterialDB.getSpecies(material).items():
+                    self._generateFixedFields(
+                        czname, f'{xpath}/species/mixture[mid="{material}"]/specie[mid="{mid}"]/value', specie)
 
     def _generateFixedVelocity(self, czname, xpath):
         if self._db.getAttribute(xpath, 'disabled') == 'false':

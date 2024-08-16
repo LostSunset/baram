@@ -3,11 +3,12 @@
 
 from enum import Enum
 
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QObject, Signal
 
 from baramFlow.coredb import coredb
-from baramFlow.coredb.models_db import ModelsDB, TurbulenceModel, UserDefinedScalarsDB
-from baramFlow.coredb.material_db import MaterialDB, Phase
+from baramFlow.coredb.models_db import ModelsDB, TurbulenceModel
+from baramFlow.coredb.scalar_model_db import UserDefinedScalarsDB
+from baramFlow.coredb.material_db import MaterialDB, Phase, MaterialType, IMaterialObserver
 from baramFlow.openfoam.solver import findSolver, getSolverCapability
 
 
@@ -51,11 +52,17 @@ class DirectionSpecificationMethod(Enum):
     AOA_AOS = 'AoA_AoS'
 
 
+class MonitorDBSignals(QObject):
+    monitorChanged = Signal()
+
+
 class MonitorDB:
     FORCE_MONITORS_XPATH = './/monitors/forces'
     POINT_MONITORS_XPATH = './/monitors/points'
     SURFACE_MONITORS_XPATH = './/monitors/surfaces'
     VOLUME_MONITORS_XPATH = './/monitors/volumes'
+
+    signals = MonitorDBSignals()
 
     @classmethod
     def getForceMonitorXPath(cls, name):
@@ -190,11 +197,16 @@ class FieldHelper:
             _appendField(Field.TEMPERATURE)
             _appendField(Field.DENSITY)
 
+        db = coredb.CoreDB()
         # Material fields on multiphase model
         if ModelsDB.isMultiphaseModelOn():
-            for mid, name, formula, phase in coredb.CoreDB().getMaterials():
-                if MaterialDB.dbTextToPhase(phase) != Phase.SOLID:
+            for mid, name, formula, phase in db.getMaterials():
+                if phase != Phase.SOLID.value:
                     _appendMaterial(mid, name)
+        elif ModelsDB.isSpeciesModelOn():
+            for mid, _, _, _ in db.getMaterials(MaterialType.MIXTURE.value):
+                for specie, name in MaterialDB.getSpecies(mid).items():
+                    _appendMaterial(specie, name)
 
         for scalarID, fieldName in coredb.CoreDB().getUserDefinedScalars():
             fields.append(cls.FieldItem(fieldName, Field.SCALAR, str(scalarID)))
@@ -213,7 +225,10 @@ class FieldHelper:
     @classmethod
     def DBFieldKeyToField(cls, field, fieldID):
         if field == Field.MATERIAL:
-            return 'alpha.' + MaterialDB.getName(fieldID)
+            if MaterialDB.getType(fieldID) == MaterialType.SPECIE:
+                return MaterialDB.getName(fieldID)
+            else:
+                return 'alpha.' + MaterialDB.getName(fieldID)
         elif field == Field.SCALAR:
             return UserDefinedScalarsDB.getFieldName(fieldID)
         else:
@@ -228,3 +243,29 @@ class FieldHelper:
                     pass
 
             return fieldName
+
+
+class MaterialObserver(IMaterialObserver):
+    def materialRemoving(self, db, mid: int):
+        removed = self._removeMonitors(db, mid)
+        if MaterialDB.getType(mid) == MaterialType.MIXTURE:
+            for sid in MaterialDB.getSpecies(mid):
+                removed = removed or self._removeMonitors(db, sid)
+
+        if removed:
+            MonitorDB.signals.monitorChanged.emit()
+
+    def specieRemoving(self, db, mid, primarySpecie):
+        if self._removeMonitors(db, mid):
+            MonitorDB.signals.monitorChanged.emit()
+
+    def _removeMonitors(self, db, mid):
+        referencingFields = db.getElements(f'monitors/*/*/field[field="material"][fieldID="{mid}"]')
+        if not referencingFields:
+            return False
+
+        for field in referencingFields:
+            monitor = field.getparent()
+            monitor.getparent().remove(monitor)
+
+        return True

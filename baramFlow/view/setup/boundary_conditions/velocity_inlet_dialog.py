@@ -12,6 +12,7 @@ from baramFlow.coredb import coredb
 from baramFlow.coredb.filedb import BcFileRole, FileFormatError
 from baramFlow.coredb.coredb_writer import CoreDBWriter
 from baramFlow.coredb.boundary_db import BoundaryDB, VelocitySpecification, VelocityProfile
+from baramFlow.coredb.region_db import RegionDB
 from baramFlow.coredb.project import Project
 from baramFlow.view.widgets.resizable_dialog import ResizableDialog
 from baramFlow.view.widgets.number_input_dialog import PiecewiseLinearDialog
@@ -43,15 +44,13 @@ class VelocityInletDialog(ResizableDialog):
         self._setupCombo(self._ui.velocitySpecificationMethod, self._specifications)
         self._setupCombo(self._ui.profileType, self._profileTypes)
 
-        self._db = coredb.CoreDB()
         self._xpath = BoundaryDB.getXPath(bcid)
 
-        layout = self._ui.dialogContents.layout()
-        rname = BoundaryDB.getBoundaryRegion(bcid)
-        self._turbulenceWidget = ConditionalWidgetHelper.turbulenceWidget(self._xpath, layout)
-        self._temperatureWidget = ConditionalWidgetHelper.temperatureWidget(self._xpath, bcid, layout)
-        self._volumeFractionWidget = ConditionalWidgetHelper.volumeFractionWidget(rname, layout)
-        self._scalarsWidget = ConditionalWidgetHelper.userDefinedScalarsWidget(rname, layout)
+        self._turbulenceWidget = None
+        self._temperatureWidget = None
+        self._volumeFractionWidget = None
+        self._scalarsWidget = None
+        self._speciesWidget = None
 
         self._componentSpatialDistributionFile = None
         self._componentSpatialDistributionFileName = None
@@ -61,6 +60,14 @@ class VelocityInletDialog(ResizableDialog):
         self._magnitudeTemporalDistribution = None
         self._dialog = None
 
+        layout = self._ui.dialogContents.layout()
+        rname = BoundaryDB.getBoundaryRegion(bcid)
+        self._turbulenceWidget = ConditionalWidgetHelper.turbulenceWidget(self._xpath, layout)
+        self._temperatureWidget = ConditionalWidgetHelper.temperatureWidget(self._xpath, bcid, layout)
+        self._volumeFractionWidget = ConditionalWidgetHelper.volumeFractionWidget(rname, layout)
+        self._scalarsWidget = ConditionalWidgetHelper.userDefinedScalarsWidget(rname, layout)
+        self._speciesWidget = ConditionalWidgetHelper.speciesWidget(RegionDB.getMaterial(rname), layout)
+
         self._connectSignalsSlots()
         self._load()
 
@@ -68,6 +75,7 @@ class VelocityInletDialog(ResizableDialog):
     async def _accept(self):
         xpath = self._xpath + self.RELATIVE_XPATH
         fileDB = Project.instance().fileDB()
+        db = coredb.CoreDB()
 
         oldDistributionFileKey = None
         distributionFileKey = None
@@ -88,7 +96,7 @@ class VelocityInletDialog(ResizableDialog):
             elif profile == VelocityProfile.SPATIAL_DISTRIBUTION.value:
                 if self._componentSpatialDistributionFile:
                     try:
-                        oldDistributionFileKey = self._db.getValue(xpath + '/velocity/component/spatialDistribution')
+                        oldDistributionFileKey = db.getValue(xpath + '/velocity/component/spatialDistribution')
                         distributionFileKey = fileDB.putBcFile(self._bcid, BcFileRole.BC_VELOCITY_COMPONENT,
                                                                self._componentSpatialDistributionFile)
                         writer.append(xpath + '/velocity/component/spatialDistribution', distributionFileKey, None)
@@ -114,7 +122,7 @@ class VelocityInletDialog(ResizableDialog):
                     writer.append(xpath + '/velocity/component/temporalDistribution/piecewiseLinear/z',
                                   self._componentTemporalDistribution[3],
                                   self.tr("Piecewise Linear Velocity"))
-                elif self._db.getValue(xpath + '/velocity/component/temporalDistribution/piecewiseLinear/t') == '':
+                elif db.getValue(xpath + '/velocity/component/temporalDistribution/piecewiseLinear/t') == '':
                     await AsyncMessageBox().information(self, self.tr("Input Error"),
                                                         self.tr("Edit Piecewise Linear Velocity."))
                     return
@@ -126,7 +134,7 @@ class VelocityInletDialog(ResizableDialog):
             elif profile == VelocityProfile.SPATIAL_DISTRIBUTION.value:
                 if self._magnitudeSpatialDistributionFile:
                     try:
-                        oldDistributionFileKey = self._db.getVale(
+                        oldDistributionFileKey = db.getVale(
                             xpath + '/velocity/magnitudeNormal/spatialDistribution')
                         distributionFileKey = fileDB.putBcFile(self._bcid, BcFileRole.BC_VELOCITY_MAGNITUDE,
                                                                self._magnitudeSpatialDistributionFile)
@@ -148,7 +156,7 @@ class VelocityInletDialog(ResizableDialog):
                     writer.append(xpath + '/velocity/magnitudeNormal/temporalDistribution/piecewiseLinear/v',
                                   self._magnitudeTemporalDistribution[1],
                                   self.tr("Piecewise Linear Velocity"))
-                elif self._db.getValue(xpath + '/velocity/magnitudeNormal/temporalDistribution/piecewiseLinear/t') == '':
+                elif db.getValue(xpath + '/velocity/magnitudeNormal/temporalDistribution/piecewiseLinear/t') == '':
                     await AsyncMessageBox().information(self, self.tr("Input Error"),
                                                         self.tr("Edit Piecewise Linear Velocity."))
                     return
@@ -165,6 +173,9 @@ class VelocityInletDialog(ResizableDialog):
         if not self._scalarsWidget.appendToWriter(writer, self._xpath + '/userDefinedScalars'):
             return
 
+        if not await self._speciesWidget.appendToWriter(writer, self._xpath + '/species'):
+            return
+
         errorCount = writer.write()
         if errorCount > 0:
             if distributionFileKey:
@@ -173,9 +184,10 @@ class VelocityInletDialog(ResizableDialog):
             self._temperatureWidget.rollbackWriting()
             await AsyncMessageBox().information(self, self.tr("Input Error"), writer.firstError().toMessage())
         else:
-            if distributionFileKey and oldDistributionFileKey:
-                fileDB.delete(oldDistributionFileKey)
-
+            ## For the copy boundary conditions feature, old key should not be deleted.
+            # if distributionFileKey and oldDistributionFileKey:
+            #     fileDB.delete(oldDistributionFileKey)
+            #
             self._temperatureWidget.completeWriting()
             self.accept()
 
@@ -190,29 +202,31 @@ class VelocityInletDialog(ResizableDialog):
         xpath = self._xpath + self.RELATIVE_XPATH
 
         filedb = Project.instance().fileDB()
+        db = coredb.CoreDB()
 
-        specification = self._db.getValue(xpath + '/velocity/specification')
+        specification = db.getValue(xpath + '/velocity/specification')
         self._ui.velocitySpecificationMethod.setCurrentText(self._specifications[specification])
         profile = None
         if specification == VelocitySpecification.COMPONENT.value:
-            profile = self._db.getValue(xpath + '/velocity/component/profile')
+            profile = db.getValue(xpath + '/velocity/component/profile')
         elif specification == VelocitySpecification.MAGNITUDE.value:
-            profile = self._db.getValue(xpath + '/velocity/magnitudeNormal/profile')
+            profile = db.getValue(xpath + '/velocity/magnitudeNormal/profile')
         self._componentSpatialDistributionFileName = filedb.getUserFileName(
-            self._db.getValue(xpath + '/velocity/component/spatialDistribution'))
+            db.getValue(xpath + '/velocity/component/spatialDistribution'))
         self._magnitudeSpatialDistributionFileName = filedb.getUserFileName(
-            self._db.getValue(xpath + '/velocity/magnitudeNormal/spatialDistribution'))
+            db.getValue(xpath + '/velocity/magnitudeNormal/spatialDistribution'))
         self._ui.profileType.setCurrentText(self._profileTypes[profile])
-        self._ui.xVelocity.setText(self._db.getValue(xpath + '/velocity/component/constant/x'))
-        self._ui.yVelocity.setText(self._db.getValue(xpath + '/velocity/component/constant/y'))
-        self._ui.zVelocity.setText(self._db.getValue(xpath + '/velocity/component/constant/z'))
-        self._ui.velocityMagnitude.setText(self._db.getValue(xpath + '/velocity/magnitudeNormal/constant'))
+        self._ui.xVelocity.setText(db.getValue(xpath + '/velocity/component/constant/x'))
+        self._ui.yVelocity.setText(db.getValue(xpath + '/velocity/component/constant/y'))
+        self._ui.zVelocity.setText(db.getValue(xpath + '/velocity/component/constant/z'))
+        self._ui.velocityMagnitude.setText(db.getValue(xpath + '/velocity/magnitudeNormal/constant'))
         self._comboChanged()
 
         self._turbulenceWidget.load()
         self._temperatureWidget.load()
         self._volumeFractionWidget.load(self._xpath + '/volumeFractions')
         self._scalarsWidget.load(self._xpath + '/userDefinedScalars')
+        self._speciesWidget.load(self._xpath + '/species')
 
     def _setupCombo(self, combo, items):
         for value, text in items.items():
@@ -257,16 +271,17 @@ class VelocityInletDialog(ResizableDialog):
         self._dialog.open()
 
     def _editTemporalDistribution(self):
+        db = coredb.CoreDB()
         if self._ui.velocitySpecificationMethod.currentData() == VelocitySpecification.COMPONENT.value:
             if self._componentTemporalDistribution is None:
                 self._componentTemporalDistribution = [
-                    self._db.getValue(
+                    db.getValue(
                         self._xpath + '/velocityInlet/velocity/component/temporalDistribution/piecewiseLinear/t'),
-                    self._db.getValue(
+                    db.getValue(
                         self._xpath + '/velocityInlet/velocity/component/temporalDistribution/piecewiseLinear/x'),
-                    self._db.getValue(
+                    db.getValue(
                         self._xpath + '/velocityInlet/velocity/component/temporalDistribution/piecewiseLinear/y'),
-                    self._db.getValue(
+                    db.getValue(
                         self._xpath + '/velocityInlet/velocity/component/temporalDistribution/piecewiseLinear/z'),
                 ]
             self._dialog = PiecewiseLinearDialog(self, self.tr("Temporal Distribution"),
@@ -277,9 +292,9 @@ class VelocityInletDialog(ResizableDialog):
         elif self._ui.velocitySpecificationMethod.currentData() == VelocitySpecification.MAGNITUDE.value:
             if self._magnitudeTemporalDistribution is None:
                 self._magnitudeTemporalDistribution = [
-                    self._db.getValue(
+                    db.getValue(
                         self._xpath + '/velocityInlet/velocity/magnitudeNormal/temporalDistribution/piecewiseLinear/t'),
-                    self._db.getValue(
+                    db.getValue(
                         self._xpath + '/velocityInlet/velocity/magnitudeNormal/temporalDistribution/piecewiseLinear/v'),
                 ]
             self._dialog = PiecewiseLinearDialog(self, self.tr("Temporal Distribution"),

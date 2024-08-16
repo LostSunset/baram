@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 from baramFlow.coredb.boundary_db import BoundaryDB, BoundaryType, InterfaceMode
-from baramFlow.coredb.initialization_db import InitializationDB
 from baramFlow.openfoam.boundary_conditions.boundary_condition import BoundaryCondition
 
 
@@ -13,7 +12,7 @@ class Scalar(BoundaryCondition):
         super().__init__(region, time, processorNo, fieldName)
 
         self._scalarID = scalarID
-        self._initialValue = InitializationDB.getInitialScalarValue(region.rname, scalarID)
+        self._initialValue = region.initialScalar(scalarID)
 
     def build0(self):
         self._data = None

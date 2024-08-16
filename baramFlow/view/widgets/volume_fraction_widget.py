@@ -3,8 +3,6 @@
 
 from PySide6.QtWidgets import QGroupBox, QFormLayout, QLineEdit
 
-from widgets.async_message_box import AsyncMessageBox
-
 from baramFlow.coredb import coredb
 from baramFlow.coredb.models_db import ModelsDB
 from baramFlow.coredb.region_db import RegionDB
@@ -35,10 +33,9 @@ class VolumeFractionWidget(QGroupBox):
     def __init__(self, rname):
         super().__init__(self.tr('Volume Fraction'))
 
-        self._on = ModelsDB.isMultiphaseModelOn() or ModelsDB.isSpeciesModelOn()
+        self._on = ModelsDB.isMultiphaseModelOn()
         self._fractions = {}
 
-        self._db = coredb.CoreDB()
         self._rname = rname
 
         self._volumeFractionsLayout = None
@@ -58,7 +55,8 @@ class VolumeFractionWidget(QGroupBox):
                     self._fractions[mid] = FractionRow(self._volumeFractionsLayout, mid)
 
                 try:
-                    value = self._db.getValue(f'{xpath}/volumeFraction[material="{mid}"]/fraction')
+                    db = coredb.CoreDB()
+                    value = db.getValue(f'{xpath}/volumeFraction[material="{mid}"]/fraction')
                 except LookupError:
                     value = '0'
 
@@ -67,21 +65,21 @@ class VolumeFractionWidget(QGroupBox):
     async def appendToWriter(self, writer: CoreDBWriter, xpath):
         if self._on:
             for mid in self._fractions:
-                try:
-                    decimal = float(self._fractions[mid].value)
-                except ValueError:
-                    await AsyncMessageBox().information(self, self.tr("Input Error"),
-                                                        self.tr(f'{self._fractions[mid].label} must be a float.'))
-                    return False
-
-            for mid in self._fractions:
                 inputValue = self._fractions[mid].value
                 fractionPath = xpath + f'/volumeFraction/[material="{mid}"]/fraction'
+
                 try:
-                    savedValue = self._db.getValue(fractionPath)
+                    db = coredb.CoreDB()
+                    savedValue = db.getValue(fractionPath)
                 except LookupError:  # the material should be added if it is not there
                     writer.addElement(xpath,
-                                      RegionDB.buildVolumeFractionElement(mid, inputValue), self._fractions[mid].label)
+                                        f'''
+                                            <volumeFraction xmlns="http://www.baramcfd.org/baram">
+                                                <material>{mid}</material>
+                                                <fraction>{inputValue}</fraction>
+                                            </volumeFraction>
+                                        ''',
+                                      self._fractions[mid].label)
                 else:
                     if inputValue != savedValue:
                         writer.append(fractionPath, inputValue, self._fractions[mid].label)
