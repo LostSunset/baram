@@ -6,10 +6,14 @@ from enum import Enum
 from PySide6.QtCore import QCoreApplication, QObject, Signal
 
 from baramFlow.coredb import coredb
-from baramFlow.coredb.models_db import ModelsDB, TurbulenceModel
+from baramFlow.coredb.models_db import ModelsDB
 from baramFlow.coredb.scalar_model_db import UserDefinedScalarsDB
-from baramFlow.coredb.material_db import MaterialDB, Phase, MaterialType, IMaterialObserver
-from baramFlow.openfoam.solver import findSolver, getSolverCapability
+from baramFlow.coredb.material_db import MaterialDB, IMaterialObserver
+from baramFlow.coredb.material_schema import Phase, MaterialType
+from baramFlow.coredb.turbulence_model_db import TurbulenceModel, TurbulenceModelsDB
+from baramFlow.openfoam.function_objects.surface_field_value import SurfaceReportType
+from baramFlow.openfoam.function_objects.vol_field_value import VolumeReportType
+from baramFlow.openfoam.solver import usePrgh
 
 
 class Field(Enum):
@@ -26,25 +30,6 @@ class Field(Enum):
     DENSITY = 'density'
     MATERIAL = 'material'
     SCALAR = 'scalar'
-
-
-class SurfaceReportType(Enum):
-    AREA_WEIGHTED_AVERAGE = 'areaWeightedAverage'
-    MASS_WEIGHTED_AVERAGE = 'massWeightedAverage'
-    INTEGRAL = 'Integral'
-    MASS_FLOW_RATE = 'massFlowRate'
-    VOLUME_FLOW_RATE = 'volumeFlowRate'
-    MINIMUM = 'minimum'
-    MAXIMUM = 'maximum'
-    COEFFICIENT_OF_VARIATION = 'cov'
-
-
-class VolumeReportType(Enum):
-    VOLUME_AVERAGE = 'volumeAverage'
-    VOLUME_INTEGRAL = 'volumeIntegral'
-    MINIMUM = 'minimum'
-    MAXIMUM = 'maximum'
-    COEFFICIENT_OF_VARIATION = 'cov'
 
 
 class DirectionSpecificationMethod(Enum):
@@ -170,8 +155,8 @@ class FieldHelper:
         def _appendField(field):
             fields.append(cls.FieldItem(cls.FIELD_TEXTS[field], field))
 
-        def _appendMaterial(mid, name):
-            fields.append(cls.FieldItem(name, Field.MATERIAL, str(mid)))
+        def _appendMaterial(mid_, name_):
+            fields.append(cls.FieldItem(name_, Field.MATERIAL, mid_))
 
         # Always available fields
         _appendField(Field.PRESSURE)
@@ -181,7 +166,7 @@ class FieldHelper:
         _appendField(Field.Z_VELOCITY)
 
         # Fields depending on the turbulence model
-        turbulenceModel = ModelsDB.getTurbulenceModel()
+        turbulenceModel = TurbulenceModelsDB.getModel()
         if turbulenceModel == TurbulenceModel.K_EPSILON:
             _appendField(Field.TURBULENT_KINETIC_ENERGY)
             _appendField(Field.TURBULENT_DISSIPATION_RATE)
@@ -200,11 +185,11 @@ class FieldHelper:
         db = coredb.CoreDB()
         # Material fields on multiphase model
         if ModelsDB.isMultiphaseModelOn():
-            for mid, name, formula, phase in db.getMaterials():
+            for mid, name, formula, phase in MaterialDB.getMaterials():
                 if phase != Phase.SOLID.value:
                     _appendMaterial(mid, name)
         elif ModelsDB.isSpeciesModelOn():
-            for mid, _, _, _ in db.getMaterials(MaterialType.MIXTURE.value):
+            for mid, _, _, _ in MaterialDB.getMaterials(MaterialType.MIXTURE.value):
                 for specie, name in MaterialDB.getSpecies(mid).items():
                     _appendMaterial(specie, name)
 
@@ -236,8 +221,7 @@ class FieldHelper:
 
             if fieldName == 'p':
                 try:
-                    cap = getSolverCapability(findSolver())
-                    if cap['usePrgh']:
+                    if usePrgh():
                         fieldName = 'p_rgh'
                 except RuntimeError:
                     pass
@@ -246,7 +230,7 @@ class FieldHelper:
 
 
 class MaterialObserver(IMaterialObserver):
-    def materialRemoving(self, db, mid: int):
+    def materialRemoving(self, db, mid: str):
         removed = self._removeMonitors(db, mid)
         if MaterialDB.getType(mid) == MaterialType.MIXTURE:
             for sid in MaterialDB.getSpecies(mid):
@@ -255,11 +239,11 @@ class MaterialObserver(IMaterialObserver):
         if removed:
             MonitorDB.signals.monitorChanged.emit()
 
-    def specieRemoving(self, db, mid, primarySpecie):
+    def specieRemoving(self, db, mid: str, primarySpecie: str):
         if self._removeMonitors(db, mid):
             MonitorDB.signals.monitorChanged.emit()
 
-    def _removeMonitors(self, db, mid):
+    def _removeMonitors(self, db, mid: str):
         referencingFields = db.getElements(f'monitors/*/*/field[field="material"][fieldID="{mid}"]')
         if not referencingFields:
             return False

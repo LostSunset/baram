@@ -50,7 +50,7 @@ class BoundaryLayerPage(StepPage):
             self._load()
 
         self._updateControlButtons()
-        self._updateMesh()
+        self.updateMesh()
 
     async def save(self):
         try:
@@ -180,10 +180,8 @@ class BoundaryLayerPage(StepPage):
             else:
                 self.createOutputPath()
 
-            #
-            #  Reorder faces in conformal interfaces
-            #  (Faces in cyclic boundary pair should match in order)
-            #
+            # Reorder faces in conformal interfaces
+            # (Faces in cyclic boundary pair should match in order)
 
             NumberOfConformalInterfaces = app.db.elementCount(
                 'geometry', lambda i, e: e['cfdType'] == CFDType.INTERFACE.value and not e['interRegion'] and not e['nonConformal'])

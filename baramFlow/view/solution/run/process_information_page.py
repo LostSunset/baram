@@ -11,6 +11,9 @@ from enum import Enum, auto
 import pandas as pd
 from PySide6.QtWidgets import QFileDialog
 
+from baramFlow.coredb.coredb_reader import CoreDBReader
+from baramFlow.openfoam.constant.turbulence_properties import TurbulenceProperties
+from baramFlow.openfoam.system.fv_options import FvOptions
 from widgets.async_message_box import AsyncMessageBox
 from widgets.list_table import ListItem
 from widgets.progress_dialog import ProgressDialog
@@ -71,7 +74,7 @@ class ProcessInformationPage(ContentPage):
         return super().showEvent(ev)
 
     def _load(self):
-        self._statusChanged(self._caseManager.status())
+        self._statusChanged(self._caseManager.status(), None, False)
         self._updateUserParameters()
 
     def _connectSignalsSlots(self):
@@ -118,8 +121,8 @@ class ProcessInformationPage(ContentPage):
                 progressDialog.finish(self.tr('Case generating fail. - ') + str(e))
             except CanceledException:
                 progressDialog.finish(self.tr('Calculation cancelled'))
-            except RuntimeError:
-                progressDialog.finish(self.tr('Solver execution failed or terminated'))
+            except RuntimeError as r:
+                progressDialog.finish(str(r))
         else:
             cases = self._batchCaseList.batchSchedule()
             if not cases:
@@ -169,6 +172,12 @@ class ProcessInformationPage(ContentPage):
         for rname in regions:
             FvSchemes(rname).build().write()
             FvSolution(rname).build().write()
+            FvOptions(rname).build().write()
+
+            region = CoreDBReader().getRegionProperties(rname)
+            if region.isFluid():
+                TurbulenceProperties(rname).build().write()
+
         ControlDict().build().writeAtomic()
 
     def _toggleUserParameters(self, checked):
@@ -219,7 +228,7 @@ class ProcessInformationPage(ContentPage):
         self._dialog.open()
 
     @qasync.asyncSlot()
-    async def _statusChanged(self, status, name=None):
+    async def _statusChanged(self, status, name=None, liveStatusChanged=False):
         if self._runningMode == RunningMode.BATCH_RUNNING_MODE:
             self._batchCaseList.updateStatus(status, name)
         else:

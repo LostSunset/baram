@@ -15,6 +15,8 @@ import asyncio
 from PySide6.QtWidgets import QMainWindow, QFileDialog, QMessageBox
 from PySide6.QtCore import Qt, QEvent, QTimer, Signal
 
+from libbaram.exception import CanceledException
+from libbaram.openfoam.polymesh import removeVoidBoundaries
 from libbaram.run import hasUtility
 from libbaram.utils import getFit
 from widgets.async_message_box import AsyncMessageBox
@@ -31,6 +33,7 @@ from baramFlow.coredb.region_db import RegionDB
 from baramFlow.coredb.project import Project
 from baramFlow.mesh.mesh_manager import MeshManager, MeshType
 from baramFlow.openfoam import parallel
+from baramFlow.openfoam.constant.cell_zones_to_regions import CellZonesToRegions
 from baramFlow.openfoam.constant.region_properties import RegionProperties
 from baramFlow.openfoam.file_system import FileSystem
 from baramFlow.openfoam.polymesh.polymesh_loader import PolyMeshLoader
@@ -51,8 +54,10 @@ from baramFlow.view.solution.monitors.monitors_page import MonitorsPage
 from baramFlow.view.solution.initialization.initialization_page import InitializationPage
 from baramFlow.view.solution.run_conditions.run_conditions_page import RunConditionsPage
 from baramFlow.view.solution.run.process_information_page import ProcessInformationPage
+from baramFlow.view.results.reports.reports_page import ReportsPage
 from .content_view import ContentView
 from .dock_view import DockView
+from .fluent_regions_dialog import FluentRegionsDialog
 from .main_window_ui import Ui_MainWindow
 from .menu.mesh.mesh_info_dialog import MeshInfoDialog
 from .navigator_view import NavigatorView, MenuItem
@@ -117,17 +122,22 @@ class MainWindow(QMainWindow):
         self._menuPages = {
             MenuItem.MENU_SETUP.value: MenuPage(),
             MenuItem.MENU_SOLUTION.value: MenuPage(),
+            MenuItem.MENU_RESULTS.value: MenuPage(),
+
             MenuItem.MENU_SETUP_GENERAL.value: MenuPage(GeneralPage),
             MenuItem.MENU_SETUP_MATERIALS.value: MenuPage(MaterialPage),
             MenuItem.MENU_SETUP_MODELS.value: MenuPage(ModelsPage),
             MenuItem.MENU_SETUP_CELL_ZONE_CONDITIONS.value: MenuPage(CellZoneConditionsPage),
             MenuItem.MENU_SETUP_BOUNDARY_CONDITIONS.value: MenuPage(BoundaryConditionsPage),
             MenuItem.MENU_SETUP_REFERENCE_VALUES.value: MenuPage(ReferenceValuesPage),
+
             MenuItem.MENU_SOLUTION_NUMERICAL_CONDITIONS.value: MenuPage(NumericalConditionsPage),
             MenuItem.MENU_SOLUTION_MONITORS.value: MenuPage(MonitorsPage),
             MenuItem.MENU_SOLUTION_INITIALIZATION.value: MenuPage(InitializationPage),
             MenuItem.MENU_SOLUTION_RUN_CONDITIONS.value: MenuPage(RunConditionsPage),
             MenuItem.MENU_SOLUTION_RUN.value: MenuPage(ProcessInformationPage),
+
+            MenuItem.MENU_RESULTS_REPORTS.value: MenuPage(ReportsPage),
         }
 
         self._dialog = None
@@ -191,15 +201,10 @@ class MainWindow(QMainWindow):
 
     def _setupShortcuts(self):
         self._ui.actionSave.setShortcut('Ctrl+S')
-        self._ui.actionSaveAs.setShortcut('Ctrl+A')
         self._ui.actionCloseProject.setShortcut('Ctrl+E')
         self._ui.actionExit.setShortcut('Ctrl+Q')
-
         self._ui.actionParallelEnvironment.setShortcut('Ctrl+P')
-
         self._ui.actionLanguage.setShortcut('Ctrl+L')
-
-        self._ui.actionParaView.setShortcut('Ctrl+V')
 
     def _connectSignalsSlots(self):
         self._ui.actionSave.triggered.connect(self._save)
@@ -520,7 +525,7 @@ class MainWindow(QMainWindow):
         self._dialog.open()
 
     def meshUpdated(self):
-        if RegionDB.getNumberOfRegions() > 1:  # multi-region
+        if RegionDB.isMultiRegion():
             ModelsDB.EnergyModelOn()
 
         self._project.save()
@@ -547,7 +552,7 @@ class MainWindow(QMainWindow):
             self._loadForm(currentMenu)
 
     @qasync.asyncSlot()
-    async def _solverStatusChanged(self, status, liveStatusChanged=False):
+    async def _solverStatusChanged(self, status, name, liveStatusChanged=False):
         batchRunning = CaseManager().isBatchRunning()
         solverRunning = status == SolverStatus.RUNNING or batchRunning
 
@@ -689,6 +694,8 @@ class MainWindow(QMainWindow):
             progressDialog.setLabelText(self.tr('Copying files.'))
             await meshManager.importMeshFiles(path)
 
+            removeVoidBoundaries(FileSystem.caseRoot())
+
             progressDialog.close()
 
             await self._loadMesh()
@@ -708,6 +715,8 @@ class MainWindow(QMainWindow):
 
             progressDialog.setLabelText(self.tr('Copying files.'))
             await MeshManager().importPolyMeshes(self._dialog.data())
+
+            removeVoidBoundaries(FileSystem.caseRoot())
 
             progressDialog.close()
 
@@ -732,14 +741,57 @@ class MainWindow(QMainWindow):
             progressDialog.setLabelText(self.tr('Converting the mesh.'))
             progressDialog.cancelClicked.connect(meshManager.cancel)
             progressDialog.showCancelButton()
-            await meshManager.convertMesh(Path(file), meshType)
+            if meshType == MeshType.FLUENT:
+                if await meshManager.waitCellZonesInfo(Path(file)):
+                    progressDialog.close()
 
+                    cellZones = CellZonesToRegions().loadCellZones()
+                    if len(cellZones) > 1 or 'solid' in cellZones.values():
+                        self._dialog = FluentRegionsDialog(self, cellZones)
+                        self._dialog.accepted.connect(lambda: self._cellZonesToRegions(meshManager))
+                        self._dialog.rejected.connect(meshManager.cancel)
+                        self._dialog.open()
+                    else:
+                        CellZonesToRegions().setSingleCellZone(cellZones.keys()[0]).write()
+                        await self._cellZonesToRegions(meshManager)
+                else:
+                    self._deleteMeshFilesAndData()
+                    progressDialog.finish(self.tr('Failed to extract cell zones.'))
+            else:
+                await meshManager.convertMesh(Path(file), meshType)
+                removeVoidBoundaries(FileSystem.caseRoot())
+                progressDialog.close()
+                await self._loadMesh()
+        except CanceledException:
+            self._deleteMeshFilesAndData()
             progressDialog.close()
-
-            await self._loadMesh()
         except Exception as ex:
             self._deleteMeshFilesAndData()
             progressDialog.finish(self.tr('Mesh import failed:\n' + str(ex)))
+
+    @qasync.asyncSlot()
+    async def _cellZonesToRegions(self, meshManager):
+        progressDialog = ProgressDialog(self, self.tr('Mesh Converting'))
+        progressDialog.setLabelText(self.tr('Converting the mesh'))
+        progressDialog.showCancelButton()
+        progressDialog.cancelClicked.connect(meshManager.cancel)
+        progressDialog.open()
+
+        try:
+            result = await meshManager.fulentCellZonesToRegions()
+            if result == 0:
+                removeVoidBoundaries(FileSystem.caseRoot())
+                progressDialog.close()
+                await self._loadMesh()
+                return
+
+            progressDialog.finish(self.tr('Failed to convert mesh.'))
+        except CanceledException:
+            pass
+        except Exception as ex:
+            progressDialog.finish(self.tr('Mesh Convert failed:\n' + str(ex)))
+
+        self._deleteMeshFilesAndData()
 
     async def _loadMesh(self):
         progressDialog = ProgressDialog(self, self.tr('Mesh Loading'))
@@ -758,11 +810,10 @@ class MainWindow(QMainWindow):
             redistributeTask = RedistributionTask()
             redistributeTask.progress.connect(progressDialog.setLabelText)
             await redistributeTask.redistribute()
-
-            progressDialog.close()
-            return
         except Exception as ex:
             progressDialog.finish(self.tr('Error occurred:\n' + str(ex)))
+
+        progressDialog.close()
 
     def _runParaView(self, executable, updateSetting=True):
         casePath = FileSystem.foamFilePath()

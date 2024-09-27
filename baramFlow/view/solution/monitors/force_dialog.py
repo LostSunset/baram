@@ -7,8 +7,9 @@ from baramFlow.coredb import coredb
 from baramFlow.coredb.coredb_writer import CoreDBWriter
 from baramFlow.coredb.boundary_db import BoundaryDB
 from baramFlow.coredb.monitor_db import MonitorDB, DirectionSpecificationMethod
+from baramFlow.view.widgets.region_objects_selector import BoundariesSelector
+
 from .force_dialog_ui import Ui_ForceDialog
-from .region_objects_selector import BoundariesSelector
 
 
 class ForceDialog(QDialog):
@@ -31,7 +32,7 @@ class ForceDialog(QDialog):
 
         self._ui.specificationMethod.addEnumItems({
             DirectionSpecificationMethod.DIRECT:    self.tr('Direct'),
-            DirectionSpecificationMethod.AOA_AOS:   self.tr('Angles of Attack, Sideslip')
+            DirectionSpecificationMethod.AOA_AOS:   self.tr('AOA and AOS')
         })
 
         if name is None:
@@ -162,5 +163,5 @@ class ForceDialog(QDialog):
             self._ui.direction.setTitle(self.tr('Direction'))
             self._ui.angles.hide()
         else:
-            self._ui.direction.setTitle(self.tr('Direction at AoA=0, AoS=0'))
+            self._ui.direction.setTitle(self.tr('Direction at AOA=0, AOS=0'))
             self._ui.angles.show()

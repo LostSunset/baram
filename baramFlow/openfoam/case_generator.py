@@ -6,7 +6,6 @@ import logging
 
 from PySide6.QtCore import QCoreApplication, QObject, Signal
 
-from baramFlow.coredb.material_db import MaterialDB
 from libbaram import utils
 from libbaram.exception import CanceledException
 from libbaram.run import RunUtility, RunParallelUtility
@@ -15,6 +14,8 @@ from baramFlow.app import app
 from baramFlow.coredb import coredb
 from baramFlow.coredb.boundary_db import BoundaryDB
 from baramFlow.coredb.coredb_reader import CoreDBReader
+from baramFlow.coredb.general_db import GeneralDB
+from baramFlow.coredb.material_db import MaterialDB
 from baramFlow.coredb.models_db import ModelsDB
 from baramFlow.openfoam import parallel
 from baramFlow.openfoam.constant.dynamic_mesh_dict import DynamicMeshDict
@@ -39,6 +40,7 @@ from baramFlow.openfoam.boundary_conditions.t import T
 from baramFlow.openfoam.boundary_conditions.u import U
 from baramFlow.openfoam.file_system import FileSystem
 from baramFlow.openfoam.polymesh.boundary import Boundary
+from baramFlow.openfoam.solver import findSolver
 from baramFlow.openfoam.system.control_dict import ControlDict
 from baramFlow.openfoam.system.fv_options import FvOptions
 from baramFlow.openfoam.system.fv_schemes import FvSchemes
@@ -63,7 +65,8 @@ class CaseGenerator(QObject):
         return self._errors
 
     def _gatherFiles(self):
-        if errors := self._validate():
+        solver = findSolver()
+        if errors := self._validate(solver):
             return errors
 
         # Files that can be in case root folder or region folders
@@ -96,7 +99,7 @@ class CaseGenerator(QObject):
             self._files.append(FvSchemes(rname))
             self._files.append(FvSolution(rname))
             self._files.append(FvOptions(rname))
-            self._files.append(SetFieldsDict(rname))
+            self._files.append(SetFieldsDict(region))
 
         # Files that should be created in case root folder in addition to the region folders.
 
@@ -118,9 +121,16 @@ class CaseGenerator(QObject):
                 return
             file.build().write()
 
-    def _validate(self):
-        errors = ''
+    def _validate(self, solver):
+        if not GeneralDB.isTimeTransient():
+            if solver == 'interPhaseChangeFoam':
+                return QCoreApplication.translate('CaseGenerator',
+                                                     'interPhaseChangeFoam supports time transient calculation only.')
+            if solver == 'multiphaseInterFoam':
+                return QCoreApplication.translate('CaseGenerator',
+                                                  'multiphaseInterFoam supports time transient calculation only.')
 
+        errors = ''
         regions = self._db.getRegions()
         for rname in regions:
             boundaries = self._db.getBoundaryConditions(rname)
@@ -153,6 +163,9 @@ class CaseGenerator(QObject):
         if ModelsDB.isMultiphaseModelOn():
             for mid in region.secondaryMaterials:
                 self._files.append(Alpha(region, time, processorNo, mid))
+            if findSolver() == 'multiphaseInterFoam':  # multiphaseInterFoam requires field file for all the phases
+                self._files.append(Alpha(region, time, processorNo, region.mid))
+
         elif ModelsDB.isSpeciesModelOn():
             for mid, name in MaterialDB.getSpecies(region.mid).items():
                 self._files.append(Specie(region, time, processorNo, mid, name))

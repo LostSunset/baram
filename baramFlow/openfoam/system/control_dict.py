@@ -1,64 +1,41 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from pathlib import Path
-import platform
-
-from libbaram.app_path import APP_PATH
-from libbaram.math import calucateDirectionsByRotation
-from libbaram.openfoam.dictionary.dictionary_file import DictionaryFile
-
-import baramFlow.openfoam.solver
 from baramFlow.app import app
 from baramFlow.coredb import coredb
 from baramFlow.coredb.boundary_db import BoundaryDB, BoundaryType, WallVelocityCondition, DirectionSpecificationMethod
 from baramFlow.coredb.cell_zone_db import CellZoneDB
 from baramFlow.coredb.coredb_reader import CoreDBReader
 from baramFlow.coredb.general_db import GeneralDB
-from baramFlow.coredb.material_db import MaterialDB, Phase, MaterialType
-from baramFlow.coredb.models_db import ModelsDB, TurbulenceModel, TurbulenceModelsDB
-from baramFlow.coredb.scalar_model_db import ScalarSpecificationMethod, UserDefinedScalarsDB
-from baramFlow.coredb.monitor_db import MonitorDB, FieldHelper, SurfaceReportType, VolumeReportType, Field
+from baramFlow.coredb.material_db import MaterialDB
+from baramFlow.coredb.material_schema import Phase, MaterialType
+from baramFlow.coredb.models_db import ModelsDB
+from baramFlow.coredb.monitor_db import MonitorDB, FieldHelper, Field
 from baramFlow.coredb.numerical_db import NumericalDB
 from baramFlow.coredb.reference_values_db import ReferenceValuesDB
 from baramFlow.coredb.region_db import RegionDB
 from baramFlow.coredb.run_calculation_db import RunCalculationDB, TimeSteppingMethod
+from baramFlow.coredb.scalar_model_db import ScalarSpecificationMethod, UserDefinedScalarsDB
+from baramFlow.coredb.turbulence_model_db import TurbulenceModel, TurbulenceModelsDB
 from baramFlow.mesh.vtk_loader import isPointInDataSet
 from baramFlow.openfoam.file_system import FileSystem
-from baramFlow.openfoam.solver import findSolver, getSolverCapability
+from baramFlow.openfoam.function_objects.components import foComponentsMonitor
+from baramFlow.openfoam.function_objects.force_coeffs import foForceCoeffsMonitor
+from baramFlow.openfoam.function_objects.forces import foForcesMonitor
+from baramFlow.openfoam.function_objects.mag import foMagMonitor
+from baramFlow.openfoam.function_objects.patch_probes import foPatchProbesMonitor
+from baramFlow.openfoam.function_objects.probes import foProbesMonitor
+from baramFlow.openfoam.function_objects.surface_field_value import SurfaceReportType, \
+    foSurfaceFieldValueMonitor
+from baramFlow.openfoam.function_objects.vol_field_value import VolumeReportType, VolumeType, \
+    foVolFieldValueMonitor
+from baramFlow.openfoam.solver import findSolver, usePrgh
+
+from libbaram.math import calucateDirectionsByRotation
+from libbaram.openfoam.dictionary.dictionary_file import DictionaryFile
+from libbaram.openfoam.of_utils import openfoamLibraryPath
+
 from .fv_options import generateSourceTermField, generateFixedValueField
-
-
-SURFACE_MONITOR_OPERATION = {
-    SurfaceReportType.AREA_WEIGHTED_AVERAGE.value: 'areaAverage',
-    SurfaceReportType.MASS_WEIGHTED_AVERAGE.value: 'average',
-    SurfaceReportType.INTEGRAL.value: 'areaIntegrate',
-    SurfaceReportType.MASS_FLOW_RATE.value: 'sum',
-    SurfaceReportType.VOLUME_FLOW_RATE.value: 'areaNormalIntegrate',
-    SurfaceReportType.MINIMUM.value: 'min',
-    SurfaceReportType.MAXIMUM.value: 'max',
-    SurfaceReportType.COEFFICIENT_OF_VARIATION.value: 'CoV',
-}
-
-VOLUME_MONITOR_OPERATION = {
-    VolumeReportType.VOLUME_AVERAGE.value: 'volAverage',
-    VolumeReportType.VOLUME_INTEGRAL.value: 'volIntegrate',
-    VolumeReportType.MINIMUM.value: 'min',
-    VolumeReportType.MAXIMUM.value: 'max',
-    VolumeReportType.COEFFICIENT_OF_VARIATION.value: 'CoV',
-}
-
-_basePath = APP_PATH.joinpath('solvers', 'openfoam', 'lib')
-if platform.system() == 'Windows':
-    _libExt = '.dll'
-elif platform.system() == 'Darwin':
-    _libExt = '.dylib'
-else:
-    _libExt = '.so'
-
-
-def _libPath(baseName: str) -> str:
-    return f'"{str(_basePath.joinpath(baseName).with_suffix(_libExt))}"'
 
 
 def _getAvailableFields():
@@ -68,8 +45,7 @@ def _getAvailableFields():
     else:
         fields = ['U']
 
-    cap = getSolverCapability(findSolver())
-    if cap['usePrgh']:
+    if usePrgh():
         fields.append('p_rgh')
     else:
         fields.append('p')
@@ -93,11 +69,11 @@ def _getAvailableFields():
 
     db = coredb.CoreDB()
     if ModelsDB.isMultiphaseModelOn():
-        for mid, name, _, phase in db.getMaterials():
+        for _, name, _, phase in MaterialDB.getMaterials():
             if phase != Phase.SOLID.value:
                 fields.append(f'alpha.{name}')
     elif ModelsDB.isSpeciesModelOn():
-        for mixture, name in RegionDB.getMixturesInRegions():
+        for mixture, _ in RegionDB.getMixturesInRegions():
             for name in MaterialDB.getSpecies(mixture).values():
                 fields.append(name)
 
@@ -171,11 +147,6 @@ class ControlDict(DictionaryFile):
         self._db = CoreDBReader()
         xpath = RunCalculationDB.RUN_CALCULATION_XPATH + '/runConditions'
 
-        solvers = baramFlow.openfoam.solver.findSolvers()
-        if len(solvers) != 1:  # configuration not enough yet
-            solvers = ['solver']
-            # raise RuntimeError
-
         endTime = None
         deltaT = None
         adjustTimeStep = 'no'
@@ -199,7 +170,7 @@ class ControlDict(DictionaryFile):
             purgeWrite = self._db.getValue(xpath + '/maximumNumberOfDataFiles')
 
         self._data = {
-            'application': solvers[0],
+            'application': findSolver(),
             'startFrom': 'latestTime',
             'startTime': 0,
             'stopAt': 'endTime',
@@ -217,6 +188,7 @@ class ControlDict(DictionaryFile):
             'runTimeModifiable': 'yes',
             'adjustTimeStep': adjustTimeStep,
             'maxCo': self._db.getValue(xpath + '/maxCourantNumber'),
+            'maxDi': self._db.getValue(xpath + '/maxDiffusionNumber'),
             'functions': {}
         }
 
@@ -227,7 +199,7 @@ class ControlDict(DictionaryFile):
                 or any(
                     [self._db.getValue(BoundaryDB.getXPath(bcid) + '/wall/velocity/type') == WallVelocityCondition.ATMOSPHERIC_WALL.value
                      for bcid, _ in self._db.getBoundaryConditionsByType(BoundaryType.WALL.value)])):
-            self._data['libs'] = [_libPath('libatmosphericModels')]
+            self._data['libs'] = [openfoamLibraryPath('libatmosphericModels')]
 
         # calling order is important for these three function objects
         # scalar transport FO should be called first so that monitoring and residual can refer the scalar fields
@@ -260,7 +232,7 @@ class ControlDict(DictionaryFile):
 
             self._data['functions'][fieldName] = {
                 'type': 'scalarTransport',
-                'libs': [_libPath('libsolverFunctionObjects')],
+                'libs': [openfoamLibraryPath('libsolverFunctionObjects')],
                 'field': fieldName,
                 'schemesField': 'scalar',
                 'nCorr': 2,
@@ -275,18 +247,19 @@ class ControlDict(DictionaryFile):
             specificationMethod = self._db.getValue(xpath + '/diffusivity/specificationMethod')
             if specificationMethod == ScalarSpecificationMethod.CONSTANT.value:
                 self._data['functions'][fieldName]['D'] = self._db.getValue(xpath + '/diffusivity/constant')
-            elif specificationMethod == ScalarSpecificationMethod.TURBULENT_VISCOSITY.value:
-                self._data['functions'][fieldName]['nut'] = 'nut'
+            # elif specificationMethod == ScalarSpecificationMethod.TURBULENT_VISCOSITY.value:
+            #     self._data['functions'][fieldName]['nut'] = 'nut'
             elif specificationMethod == ScalarSpecificationMethod.LAMINAR_AND_TURBULENT_VISCOSITY.value:
                 self._data['functions'][fieldName]['alphaD'] = self._db.getValue(
                     xpath + '/diffusivity/laminarAndTurbulentViscosity/laminarViscosityCoefficient')
                 self._data['functions'][fieldName]['alphaDt'] = self._db.getValue(
                     xpath + '/diffusivity/laminarAndTurbulentViscosity/turbulentViscosityCoefficient')
 
-            if region := self._db.getValue(xpath + '/region'):
-                self._data['functions'][fieldName]['region'] = region
+            if rname := self._db.getValue(xpath + '/region'):
+                self._data['functions'][fieldName]['region'] = rname
 
-            if mid := int(self._db.getValue(xpath + 'material')):
+            mid = self._db.getValue(xpath + 'material')
+            if mid != '0':
                 self._data['functions'][fieldName]['phase'] = MaterialDB.getName(mid)
 
     def _appendMonitoringFunctionObjects(self):
@@ -328,7 +301,7 @@ class ControlDict(DictionaryFile):
 
             self._data['functions'][residualsName] = {
                 'type': 'solverInfo',
-                'libs': [_libPath('libutilityFunctionObjects')],
+                'libs': [openfoamLibraryPath('libutilityFunctionObjects')],
                 'executeControl': 'timeStep',
                 'executeInterval': '1',
                 'writeResidualFields': 'no',
@@ -339,65 +312,47 @@ class ControlDict(DictionaryFile):
                 self._data['functions'][residualsName].update({'region': rname})
 
     def _generateForces(self, xpath, patches):
-        data = {
-            'type': 'forces',
-            'libs': [_libPath('libforces')],
+        cofr = self._db.getVector(xpath + '/centerOfRotation')
+        rname = self._db.getValue(xpath + '/region')
+        interval = int(self._db.getValue(xpath + '/writeInterval'))
 
-            'patches': patches,
-            'CofR': self._db.getVector(xpath + '/centerOfRotation'),
-
-            'writeControl': 'timeStep',
-            'writeInterval': self._db.getValue(xpath + '/writeInterval'),
-            'updateHeader': 'false',
-            'log': 'false',
-        }
-
-        if rname := self._db.getValue(xpath + '/region'):
-            data['region'] = rname
+        data = foForcesMonitor(patches, cofr, rname, interval)
 
         return data
 
     def _generateForceMonitor(self, xpath, patches):
-        drag = self._db.getVector(xpath + '/forceDirection/dragDirection')
-        lift = self._db.getVector(xpath + '/forceDirection/liftDirection')
+        aRef = float(self._db.getValue(ReferenceValuesDB.REFERENCE_VALUES_XPATH + '/area'))
+        lRef = float(self._db.getValue(ReferenceValuesDB.REFERENCE_VALUES_XPATH + '/length'))
+        magUInf = float(self._db.getValue(ReferenceValuesDB.REFERENCE_VALUES_XPATH + '/velocity'))
+        rhoInf = float(self._db.getValue(ReferenceValuesDB.REFERENCE_VALUES_XPATH + '/density'))
+        dragDir = self._db.getVector(xpath + '/forceDirection/dragDirection')
+        liftDir = self._db.getVector(xpath + '/forceDirection/liftDirection')
+        cofr = self._db.getVector(xpath + '/centerOfRotation')
+
         if self._db.getValue(xpath + '/forceDirection/specificationMethod') == DirectionSpecificationMethod.AOA_AOS.value:
-            drag, lift = calucateDirectionsByRotation(
-                drag, lift,
+            dragDir, liftDir = calucateDirectionsByRotation(
+                dragDir, liftDir,
                 float(self._db.getValue(xpath + '/forceDirection/angleOfAttack')),
                 float(self._db.getValue(xpath + '/forceDirection/angleOfSideslip')))
 
-        data = {
-            'type': 'forceCoeffs',
-            'libs': [_libPath('libforces')],
-
-            'patches': patches,
-            'rho': 'rho',
-            'Aref': self._db.getValue(ReferenceValuesDB.REFERENCE_VALUES_XPATH + '/area'),
-            'lRef': self._db.getValue(ReferenceValuesDB.REFERENCE_VALUES_XPATH + '/length'),
-            'magUInf':  self._db.getValue(ReferenceValuesDB.REFERENCE_VALUES_XPATH + '/velocity'),
-            'rhoInf': self._db.getValue(ReferenceValuesDB.REFERENCE_VALUES_XPATH + '/density'),
-            'dragDir': drag,
-            'liftDir': lift,
-            'CofR': self._db.getVector(xpath + '/centerOfRotation'),
-
-            'writeControl': 'timeStep',
-            'writeInterval': self._db.getValue(xpath + '/writeInterval'),
-            'updateHeader': 'false',
-            'log': 'false',
-        }
-
-        if not GeneralDB.isDensityBased():
+        if GeneralDB.isDensityBased():
+            pRef = None
+        else:
             referencePressure = float(self._db.getValue(ReferenceValuesDB.REFERENCE_VALUES_XPATH + '/pressure'))
             operatingPressure = float(self._db.getValue(GeneralDB.OPERATING_CONDITIONS_XPATH + '/pressure'))
-            data['pRef'] = referencePressure + operatingPressure
+            pRef = referencePressure + operatingPressure
 
-        if rname := self._db.getValue(xpath + '/region'):
-            data['region'] = rname
+        rname = self._db.getValue(xpath + '/region')
+
+        interval = int(self._db.getValue(xpath + '/writeInterval'))
+
+        data = foForceCoeffsMonitor(patches, aRef, lRef, magUInf, rhoInf, dragDir, liftDir, cofr, pRef, rname, interval)
 
         return data
 
     def _generatePointMonitor(self, xpath):
         coordinate = self._db.getVector(xpath + '/coordinate')
+        interval = int(self._db.getValue(xpath + '/writeInterval'))
         region = self._db.getValue(xpath + '/region')
 
         if self._db.getValue(xpath + '/snapOntoBoundary') == 'true':
@@ -405,19 +360,8 @@ class ControlDict(DictionaryFile):
             if not field:
                 return None
 
-            data = {
-                'type': 'patchProbes',
-                'libs': [_libPath('libsampling')],
-
-                'patches': [BoundaryDB.getBoundaryName(self._db.getValue(xpath + '/boundary'))],
-                'fields': [field],
-                'probeLocations': [coordinate],
-
-                'writeControl': 'timeStep',
-                'writeInterval': self._db.getValue(xpath + '/writeInterval'),
-                'updateHeader': 'false',
-                'log': 'false',
-            }
+            boundary = BoundaryDB.getBoundaryName(self._db.getValue(xpath + '/boundary'))
+            data = foPatchProbesMonitor(boundary, field, coordinate, region, interval)
         else:
             if not region:
                 regions = self._db.getRegions()
@@ -432,34 +376,21 @@ class ControlDict(DictionaryFile):
             if not field:
                 return None
 
-            data = {
-                'type': 'probes',
-                'libs': [_libPath('libsampling')],
-
-                'fields': [field],
-                'probeLocations': [self._db.getVector(xpath + '/coordinate')],
-
-                'writeControl': 'timeStep',
-                'writeInterval': self._db.getValue(xpath + '/writeInterval'),
-                'updateHeader': 'false',
-                'log': 'false',
-            }
-
-        if region:
-            data['region'] = region
+            data = foProbesMonitor(field, coordinate, region, interval)
 
         return data
 
     def _generateSurfaceMonitor(self, xpath):
-        reportType = self._db.getValue(xpath + 'reportType')
+        reportType = SurfaceReportType(self._db.getValue(xpath + 'reportType'))
         surface = self._db.getValue(xpath + '/surface')
-
+        patchName = BoundaryDB.getBoundaryName(surface)
         region = BoundaryDB.getBoundaryRegion(surface)
+        interval = int(self._db.getValue(xpath + '/writeInterval'))
 
         field = None
-        if reportType == SurfaceReportType.MASS_FLOW_RATE.value:
+        if reportType == SurfaceReportType.MASS_FLOW_RATE:
             field = 'phi'
-        elif reportType == SurfaceReportType.VOLUME_FLOW_RATE.value:
+        elif reportType == SurfaceReportType.VOLUME_FLOW_RATE:
             field = 'U'
         else:
             field = self._getMonitorField(xpath, region)
@@ -467,65 +398,28 @@ class ControlDict(DictionaryFile):
         if not field:
             return None
 
-        data = {
-            'type': 'surfaceFieldValue',
-            'libs': [_libPath('libfieldFunctionObjects')],
-
-            'regionType': 'patch',
-            'name': BoundaryDB.getBoundaryName(surface),
-            'surfaceFormat': 'none',
-            'fields': [field],
-            'operation': SURFACE_MONITOR_OPERATION[reportType],
-
-            'writeFields': 'false',
-            'executeControl': 'timeStep',
-            'executeInterval': 1,
-
-            'writeControl': 'timeStep',
-            'writeInterval': self._db.getValue(xpath + '/writeInterval'),
-            'updateHeader': 'false',
-            'log': 'false',
-        }
-
-        if reportType == SurfaceReportType.MASS_WEIGHTED_AVERAGE.value:
-            data['weightField'] = 'phi'
-
-        if region:
-            data['region'] = region
+        data = foSurfaceFieldValueMonitor(patchName, field, reportType, region, interval)
 
         return data
 
     def _generateVolumeMonitor(self, xpath):
         volume = self._db.getValue(xpath + '/volume')
-
+        reportType = VolumeReportType(self._db.getValue(xpath + '/reportType'))
+        interval = int(self._db.getValue(xpath + '/writeInterval'))
         region = CellZoneDB.getCellZoneRegion(volume)
         field = self._getMonitorField(xpath, region)
         if not field:
             return None
 
-        data = {
-            'type': 'volFieldValue',
-            'libs': [_libPath('libfieldFunctionObjects')],
-
-            'fields': [field],
-            'operation': VOLUME_MONITOR_OPERATION[self._db.getValue(xpath + '/reportType')],
-            'writeFields': 'false',
-
-            'writeControl': 'timeStep',
-            'writeInterval': '1',
-            'updateHeader': 'false',
-            'log': 'false',
-        }
-
         name = CellZoneDB.getCellZoneName(volume)
-        if name == CellZoneDB.NAME_FOR_REGION:
-            data['regionType'] = 'all'
+        if CellZoneDB.isRegion(name):
+            volumeType = VolumeType.All
+            volumeName = None
         else:
-            data['regionType'] = 'cellZone'
-            data['name'] = name
+            volumeType = VolumeType.CELLZONE
+            volumeName = name
 
-        if region:
-            data['region'] = region
+        data = foVolFieldValueMonitor(volumeType, volumeName, field, reportType, region, interval)
 
         return data
 
@@ -551,32 +445,8 @@ class ControlDict(DictionaryFile):
 
     def _appendMagFieldFunctionObject(self):
         if 'mag1' not in self._data['functions']:
-            self._data['functions']['mag1'] = {
-                'type':            'mag',
-                'libs':            [_libPath('libfieldFunctionObjects')],
-
-                'field':           '"U"',
-
-                'enabled':         'true',
-                'updateHeader':    'false',
-                'log':             'false',
-                'executeControl':  'timeStep',
-                'executeInterval': 1,
-                'writeControl':    'none'
-            }
+            self._data['functions']['mag1'] = foMagMonitor('U', 1)
 
     def _appendComponentsFunctionObject(self):
         if 'components1' not in self._data['functions']:
-            self._data['functions']['components1'] = {
-                'type':            'components',
-                'libs':            [_libPath('libfieldFunctionObjects')],
-
-                'field':           '"U"',
-
-                'enabled':         'true',
-                'updateHeader':    'false',
-                'log':             'false',
-                'executeControl':  'timeStep',
-                'executeInterval': 1,
-                'writeControl':    'none'
-            }
+            self._data['functions']['components1'] = foComponentsMonitor('U', 1)

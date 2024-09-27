@@ -11,6 +11,7 @@ import asyncio
 
 from libbaram import utils
 from libbaram.openfoam.constants import Directory, CASE_DIRECTORY_NAME, FOAM_FILE_NAME
+from libbaram.openfoam.polymesh import isPolyMesh
 
 from resources import resource
 
@@ -213,18 +214,8 @@ class FileSystem:
         return path
 
     @classmethod
-    def isPolyMesh(cls, path: Path):
-        checkFiles = ['boundary', 'faces', 'neighbour', 'owner', 'points']
-        for f in checkFiles:
-            if path.joinpath(f).is_file() or path.joinpath(f'{f}.gz').is_file():
-                continue
-            else:
-                return False
-        return True
-
-    @classmethod
     def hasPolyMesh(cls):
-        return (cls.isPolyMesh(cls.polyMeshPath())
+        return (isPolyMesh(cls.polyMeshPath())
                 or cls.constantPath().joinpath(Directory.REGION_PROPERTIES_FILE_NAME).is_file())
 
     @classmethod
@@ -273,7 +264,8 @@ class FileSystem:
 
                 for rname in regions:
                     copyDirectory(sourceConstantPath, targetConstantPath, rname)
-                    copyFile(sourceSystemPath / rname, cls.makeDir(targetSystemPath, rname), 'decomposeParDict')
+                    if len(processorFolders):
+                        copyFile(sourceSystemPath / rname, cls.makeDir(targetSystemPath, rname), 'decomposeParDict')
 
                     for processorPath in processorFolders:
                         destProcessorPath = cls.makeDir(targetCaseRoot, processorPath.name)
@@ -313,6 +305,9 @@ class FileSystem:
     def latestTimeToZero(cls):
         for parent in [cls._casePath, *cls.processorFolders()]:
             latestTime = cls.latestTime(parent)
+            if latestTime == '0':
+                continue
+
             zeroPath = parent / '0'
             latestPath = parent / latestTime
 
