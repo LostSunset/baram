@@ -7,11 +7,9 @@ import logging
 
 from PyFoam.RunDictionary.ParsedParameterFile import ParsedParameterFile
 
-from libbaram.math import calucateDirectionsByRotation
 from libbaram.openfoam.dictionary.dictionary_file import DictionaryFile, DataClass
 
-from baramFlow.coredb.boundary_db import DirectionSpecificationMethod
-from baramFlow.coredb.coredb_reader import CoreDBReader
+from baramFlow.coredb.coredb_reader import CoreDBReader, Region
 from baramFlow.coredb.material_db import UNIVERSAL_GAS_CONSTANT, MaterialDB
 from baramFlow.coredb.turbulence_model_db import TurbulenceModel
 from baramFlow.openfoam.constant.boundary_data import BoundaryData
@@ -27,7 +25,7 @@ class BoundaryCondition(DictionaryFile):
         TEMPORAL_SCALAR_LIST = auto()
         TEMPORAL_VECTOR_LIST = auto()
 
-    def __init__(self, region, time, processorNo, field, class_=DataClass.CLASS_VOL_SCALAR_FIELD):
+    def __init__(self, region: Region, time, processorNo, field, class_=DataClass.CLASS_VOL_SCALAR_FIELD):
         super().__init__(FileSystem.caseRoot(), self.boundaryLocation(region.rname, time), field, class_)
 
         self._initialValue = None
@@ -102,7 +100,7 @@ class BoundaryCondition(DictionaryFile):
     def _constructFarfieldRiemann(self, xpath, value):
         return {
             'type': 'farfieldRiemann',
-            'flowDir': self._calculateFarfiledRiemanFlowDirection(xpath + '/flowDirection'),
+            'flowDir': self._db.getFlowDirection(xpath + '/flowDirection'),
             'MInf': self._db.getValue(xpath + '/machNumber'),
             'pInf': self._db.getValue(xpath + '/staticPressure'),
             'TInf': self._db.getValue(xpath + '/staticTemperature'),
@@ -295,16 +293,6 @@ class BoundaryCondition(DictionaryFile):
     def _calculateFreeStreamLES(self, xpath, region):
         k, e, w = self._calculateFreeStreamTurbulentValues(xpath, region, TurbulenceModel.LES)
         return k, w
-
-    def _calculateFarfiledRiemanFlowDirection(self, xpath):
-        drag = self._db.getVector(xpath + '/dragDirection')
-        lift = self._db.getVector(xpath + '/liftDirection')
-        if self._db.getValue(xpath + '/specificationMethod') == DirectionSpecificationMethod.AOA_AOS.value:
-            drag, lift = calucateDirectionsByRotation(drag, lift,
-                                                      float(self._db.getValue(xpath + '/angleOfAttack')),
-                                                      float(self._db.getValue(xpath + '/angleOfSideslip')))
-
-        return drag
 
     def _calculateGamma(self, materials, t: float):
         cp = self._db.getSpecificHeat(materials, t)

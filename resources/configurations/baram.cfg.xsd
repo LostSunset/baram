@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="http://www.baramcfd.org/baram"
-           xmlns="http://www.baramcfd.org/baram" elementFormDefault="qualified" version="8">
+           xmlns="http://www.baramcfd.org/baram" elementFormDefault="qualified" version="9">
 
     <!-- type definitions -->
     <xs:simpleType name="positive">
@@ -1319,7 +1319,26 @@
 
     <xs:complexType name="freeStreamType">
         <xs:sequence>
-            <xs:element name="streamVelocity" type="vector"/>
+            <xs:element name="flowDirection">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="specificationMethod" default="direct">
+                            <xs:simpleType>
+                                <xs:restriction base="xs:string">
+                                    <xs:enumeration value="direct"/>
+                                    <xs:enumeration value="AoA_AoS"/>
+                                </xs:restriction>
+                            </xs:simpleType>
+                        </xs:element>
+                        <xs:element name="flowDirection" type="vector"/>
+                        <xs:element name="dragDirection" type="vector"/>
+                        <xs:element name="liftDirection" type="vector"/>
+                        <xs:element name="angleOfAttack" type="inputNumberType" default="0"/>
+                        <xs:element name="angleOfSideslip" type="inputNumberType" default="0"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="speed" type="inputNumberType" default="1"/>
             <xs:element name="pressure" type="inputNumberType" default="0"/>
         </xs:sequence>
     </xs:complexType>
@@ -1337,6 +1356,7 @@
                                 </xs:restriction>
                             </xs:simpleType>
                         </xs:element>
+                        <xs:element name="flowDirection" type="vector"/>
                         <xs:element name="dragDirection" type="vector"/>
                         <xs:element name="liftDirection" type="vector"/>
                         <xs:element name="angleOfAttack" type="inputNumberType" default="0"/>
@@ -1698,7 +1718,7 @@
                                 </xs:restriction>
                             </xs:simpleType>
                         </xs:element>
-                        <xs:element name="volumeFraction" default="firstOrderUpwind">
+                        <xs:element name="volumeFraction" default="secondOrderUpwind">
                             <xs:simpleType>
                                 <xs:restriction base='xs:string'>
                                     <xs:enumeration value='firstOrderUpwind'/>
@@ -1715,7 +1735,7 @@
                                 </xs:restriction>
                             </xs:simpleType>
                         </xs:element>
-                        <xs:element name="scalar" default="firstOrderUpwind">
+                        <xs:element name="scalar" default="secondOrderUpwind">
                             <xs:simpleType>
                                 <xs:restriction base='xs:string'>
                                     <xs:enumeration value='firstOrderUpwind'/>
@@ -1723,7 +1743,7 @@
                                 </xs:restriction>
                             </xs:simpleType>
                         </xs:element>
-                        <xs:element name="species" default="firstOrderUpwind">
+                        <xs:element name="species" default="secondOrderUpwind">
                             <xs:simpleType>
                                 <xs:restriction base='xs:string'>
                                     <xs:enumeration value='firstOrderUpwind'/>
@@ -1911,6 +1931,21 @@
                                     </xs:element>
                                     <xs:element name="UDS" type="xs:boolean" default="true"/>
                                     <xs:element name="species" type="xs:boolean" default="true"/>
+                                </xs:sequence>
+                            </xs:complexType>
+                        </xs:element>
+                        <xs:element name="collateralFields">
+                            <xs:complexType>
+                                <xs:sequence>
+                                    <xs:element name="age" type="xs:boolean" default="false"/>
+                                    <xs:element name="heatTransferCoefficient" type="xs:boolean" default="false"/>
+                                    <xs:element name="machNumber" type="xs:boolean" default="false"/>
+                                    <xs:element name="q" type="xs:boolean" default="false"/>
+                                    <xs:element name="totalPressure" type="xs:boolean" default="false"/>
+                                    <xs:element name="vorticity" type="xs:boolean" default="false"/>
+                                    <xs:element name="wallHeatFlux" type="xs:boolean" default="false"/>
+                                    <xs:element name="wallShearStress" type="xs:boolean" default="false"/>
+                                    <xs:element name="wallYPlus" type="xs:boolean" default="false"/>
                                 </xs:sequence>
                             </xs:complexType>
                         </xs:element>

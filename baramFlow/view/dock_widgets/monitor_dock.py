@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import qasync
-from PySide6.QtCore import Qt, QCoreApplication, QEvent
+from PySide6.QtCore import Qt, QCoreApplication, QEvent, QMargins
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QWidget, QScrollArea, QVBoxLayout
 from PySide6QtAds import CDockWidget
 
@@ -17,16 +18,14 @@ from baramFlow.openfoam.post_processing.monitor import ForceMonitor, PointMonito
 class MonitorView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+
         self._setupUi()
 
         self._project = Project.instance()
         self._monitors = {}
         self._deletedMonitors = None
 
-        self._project.projectClosed.connect(self._projectClosed)
-        CaseManager().caseLoaded.connect(self._caseLoaded)
-        CaseManager().caseCleared.connect(self._caseCleared)
-        self._project.solverStatusChanged.connect(self._solverStatusChanged)
+        self._connectSignalsSlots()
 
     def _setupUi(self):
         self._layout = QVBoxLayout(self)
@@ -39,6 +38,18 @@ class MonitorView(QWidget):
 
         self._scrollArea.setWidget(self._chartsWidget)
         self._layout.addWidget(self._scrollArea)
+
+    def _connectSignalsSlots(self):
+        self._project.projectClosed.connect(self._projectClosed)
+        self._project.solverStatusChanged.connect(self._solverStatusChanged)
+        CaseManager().caseLoaded.connect(self._caseLoaded)
+        CaseManager().caseCleared.connect(self._caseCleared)
+
+    def _disconnectSignalsSlots(self):
+        self._project.projectClosed.disconnect(self._projectClosed)
+        self._project.solverStatusChanged.disconnect(self._solverStatusChanged)
+        CaseManager().caseLoaded.disconnect(self._caseLoaded)
+        CaseManager().caseCleared.disconnect(self._caseCleared)
 
     @qasync.asyncSlot()
     async def _caseLoaded(self):
@@ -108,10 +119,23 @@ class MonitorView(QWidget):
             del self._deletedMonitors[name]
 
     def _createChart(self, maxX):
-        chart = ChartWidget()
+        chart = ChartWidget(maxX)
+        chart.setFixedSize(500, 300)
+        chart.layout().setContentsMargins(QMargins(15, 10, 15, 15))
+
+        pal = QPalette()
+        pal.setColor(QPalette.Window, Qt.white)
+        chart.setAutoFillBackground(True)
+        chart.setPalette(pal)
+
         self._chartsLayout.addWidget(chart)
+
         return chart
 
+    def closeEvent(self, event):
+        self._disconnectSignalsSlots()
+
+        super().closeEvent(event)
 
 class MonitorDock(CDockWidget):
     def __init__(self):

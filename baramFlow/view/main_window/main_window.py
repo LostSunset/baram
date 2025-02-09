@@ -24,7 +24,7 @@ from widgets.progress_dialog import ProgressDialog
 from widgets.parallel.parallel_environment_dialog import ParallelEnvironmentDialog
 
 from baramFlow.app import app
-from baramFlow.case_manager import CaseManager
+from baramFlow.case_manager import CaseManager, LiveCase
 from baramFlow.coredb import coredb
 from baramFlow.coredb.app_settings import AppSettings
 from baramFlow.coredb.general_db import GeneralDB
@@ -39,6 +39,10 @@ from baramFlow.openfoam.file_system import FileSystem
 from baramFlow.openfoam.polymesh.polymesh_loader import PolyMeshLoader
 from baramFlow.openfoam.redistribution_task import RedistributionTask
 from baramFlow.solver_status import SolverStatus
+from baramFlow.view.dock_widgets.chart_dock import ChartDock
+from baramFlow.view.dock_widgets.console_dock import ConsoleDock
+from baramFlow.view.dock_widgets.monitor_dock import MonitorDock
+from baramFlow.view.dock_widgets.rendering_dock import RenderingDock
 from baramFlow.view.main_window.menu.mesh.poly_meshes_dialog import PolyMeshesDialog
 from baramFlow.view.main_window.menu.settrings.settings_language_dialog import SettingLanguageDialog
 from baramFlow.view.main_window.menu.settrings.settings_paraveiw_dialog import SettingsParaViewDialog
@@ -119,6 +123,16 @@ class MainWindow(QMainWindow):
         self._contentView = ContentView(self._ui.formView, self._ui)
         self._dockView = DockView(self._ui.menuView)
 
+        self._consoleDock = ConsoleDock()
+        self._renderingDock = RenderingDock()
+        self._chartDock = ChartDock()
+        self._monitorDock = MonitorDock()
+
+        self._dockView.addDockWidget(self._consoleDock)
+        self._dockView.addDockWidget(self._renderingDock)
+        self._dockView.addDockWidget(self._chartDock)
+        self._dockView.addDockWidget(self._monitorDock)
+
         self._menuPages = {
             MenuItem.MENU_SETUP.value: MenuPage(),
             MenuItem.MENU_SOLUTION.value: MenuPage(),
@@ -156,12 +170,14 @@ class MainWindow(QMainWindow):
         self._ui.splitter.addWidget(self._dockView)
         self._ui.splitter.setStretchFactor(2, 1)
 
-    @property
-    def dockView(self):
-        return self._dockView
+    def consoleView(self):
+        return self._consoleDock.widget()
+
+    def showConsoleDock(self):
+        self._consoleDock.raise_()
 
     def renderingView(self):
-        return self._dockView.renderingView()
+        return self._renderingDock.widget()
 
     def case(self):
         return self._caseManager
@@ -175,8 +191,15 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
+        self._disconnectSignalsSlots()
+
         self._caseManager.clear()
         Project.close()
+
+        self._consoleDock.widget().close()
+        self._renderingDock.widget().close()
+        self._chartDock.widget().close()
+        self._monitorDock.widget().close()
 
         if self._closeType == CloseType.CLOSE_PROJECT:
             app.restart()
@@ -236,25 +259,35 @@ class MainWindow(QMainWindow):
 
         self._navigatorView.currentMenuChanged.connect(self._changeForm)
 
+        self._closeTriggered.connect(self._closeProject)
+
         self._project.projectOpened.connect(self._projectOpened)
         self._project.solverStatusChanged.connect(self._solverStatusChanged)
 
         self._caseManager.caseLoaded.connect(self._caseLoaded)
 
-        self._closeTriggered.connect(self._closeProject)
+    def _disconnectSignalsSlots(self):
+        self._project.projectOpened.disconnect(self._projectOpened)
+        self._project.solverStatusChanged.disconnect(self._solverStatusChanged)
+
+        self._caseManager.caseLoaded.disconnect(self._caseLoaded)
 
     @qasync.asyncSlot()
     async def _save(self):
         if await self._saveCurrentPage():
             self._project.save()
 
-    def _saveAs(self):
-        QMessageBox.information(self, self.tr('Save as a new project'),
-                                self.tr('Only configuration and mesh are saved. (Calculation results are not copied)'))
+    @qasync.asyncSlot()
+    async def _saveAs(self):
+        await AsyncMessageBox().information(
+            self, self.tr('Save as a new project'),
+            self.tr('Only configuration and mesh are saved. (Calculation results are not copied)'))
 
         self._dialog = QFileDialog(self, self.tr('Select Project Directory'), AppSettings.getRecentLocation())
         self._dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        self._dialog.finished.connect(self._projectDirectorySelected)
+        self._dialog.fileSelected.connect(self._projectDirectorySelected)
+        # On Windows, finishing a dialog opened with the open method does not redraw the menu bar. Force repaint.
+        self._dialog.finished.connect(self._ui.menubar.repaint)
         self._dialog.open()
 
     async def _saveCurrentPage(self):
@@ -469,7 +502,7 @@ class MainWindow(QMainWindow):
 
         parallel.setEnvironment(environment)
 
-        progressDialog = ProgressDialog(self, self.tr('Case Redistribution'))
+        progressDialog = ProgressDialog(self._dialog, self.tr('Case Redistribution'))
         progressDialog.open()
 
         if numCores != oldNumCores:
@@ -570,14 +603,14 @@ class MainWindow(QMainWindow):
 
     @qasync.asyncSlot()
     async def _projectOpened(self):
-        self._caseManager.load()
+        self._caseManager.load(LiveCase())
 
         if self._caseManager.isRunning():
             self._navigatorView.setCurrentMenu(MenuItem.MENU_SOLUTION_RUN.value)
-            self._dockView.showChartDock()
+            self._chartDock.raise_()
         else:
             self._navigatorView.setCurrentMenu(MenuItem.MENU_SETUP_GENERAL.value)
-            self._dockView.showRenderingDock()
+            self._renderingDock.raise_()
 
         db = coredb.CoreDB()
         if db.hasMesh():
@@ -640,31 +673,28 @@ class MainWindow(QMainWindow):
         self._dialog.open()
 
     @qasync.asyncSlot()
-    async def _projectDirectorySelected(self, result):
-        # On Windows, finishing a dialog opened with the open method does not redraw the menu bar. Force repaint.
-        self._ui.menubar.repaint()
+    async def _projectDirectorySelected(self, file):
+        path = Path(file).resolve()
 
-        if dirs := self._dialog.selectedFiles():
-            path = Path(dirs[0]).resolve()
+        if path.exists():
+            if not path.is_dir():
+                await AsyncMessageBox().information(self, self.tr('Project Directory Error'),
+                                                    self.tr(f'{path} is not a directory.'))
+                return
+            elif os.listdir(path):
+                AsyncMessageBox().information(self, self.tr('Project Directory Error'),
+                                              self.tr(f'{path} is not empty.'))
+                return
 
-            if path.exists():
-                if not path.is_dir():
-                    QMessageBox.critical(self, self.tr('Case Directory Error'),
-                                         self.tr(f'{dirs[0]} is not a directory.'))
-                    return
-                elif os.listdir(path):
-                    QMessageBox.critical(self, self.tr('Case Directory Error'), self.tr(f'{dirs[0]} is not empty.'))
-                    return
+        if await self._saveCurrentPage():
+            progressDialog = ProgressDialog(self, self.tr('Save As'))
+            progressDialog.open()
 
-            if await self._saveCurrentPage():
-                progressDialog = ProgressDialog(self, self.tr('Save As'))
-                progressDialog.open()
+            progressDialog.setLabelText(self.tr('Saving project'))
 
-                progressDialog.setLabelText(self.tr('Saving case'))
-
-                await asyncio.to_thread(FileSystem.saveAs, self._project.path, path, coredb.CoreDB().getRegions())
-                self._project.saveAs(path)
-                progressDialog.close()
+            await asyncio.to_thread(FileSystem.saveAs, self._project.path, path, coredb.CoreDB().getRegions())
+            self._project.saveAs(path)
+            progressDialog.close()
 
     def _openMeshSelectionDialog(self, meshType, fileFilter=None):
         self._dialog = QFileDialog(self, self.tr('Select Mesh Directory'),
