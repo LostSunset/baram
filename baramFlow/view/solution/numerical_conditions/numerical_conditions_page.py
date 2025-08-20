@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QMessageBox
 
 import baramFlow.openfoam.solver
 
+from baramFlow.case_manager import CaseManager
 from baramFlow.coredb import coredb
 from baramFlow.coredb.coredb_writer import CoreDBWriter
 from baramFlow.coredb.general_db import GeneralDB
@@ -14,6 +15,7 @@ from baramFlow.coredb.models_db import ModelsDB
 from baramFlow.coredb.numerical_db import ImplicitDiscretizationScheme, UpwindDiscretizationScheme, InterpolationScheme
 from baramFlow.coredb.numerical_db import NumericalDB
 from baramFlow.coredb.numerical_db import PressureVelocityCouplingScheme, Formulation, FluxType
+from baramFlow.coredb.project import Project
 from baramFlow.coredb.turbulence_model_db import TurbulenceModel, TurbulenceModelsDB
 from baramFlow.view.widgets.content_page import ContentPage
 
@@ -70,6 +72,7 @@ class NumericalConditionsPage(ContentPage):
         self._ui.discretizationSchemeScalar.addEnumItems(self._upwindDiscretizationSchemes)
         self._ui.discretizationSchemeSpecies.addEnumItems(self._upwindDiscretizationSchemes)
 
+        self._updateEnabled()
         self._connectSignalsSlots()
 
     def _load(self):
@@ -131,14 +134,10 @@ class NumericalConditionsPage(ContentPage):
             self._ui.discretizationSchemeScalar.setEnabled(True)
             self._ui.underRelaxationFactorScalar.setEnabled(True)
             self._ui.underRelaxationFactorScalarFinal.setEnabled(timeIsTransient or allRoundSolver)
-            self._ui.absoluteScalar.setEnabled(True)
-            self._ui.relativeScalar.setEnabled(timeIsTransient or allRoundSolver)
         else:
             self._ui.discretizationSchemeScalar.setEnabled(False)
             self._ui.underRelaxationFactorScalar.setEnabled(False)
             self._ui.underRelaxationFactorScalarFinal.setEnabled(False)
-            self._ui.absoluteScalar.setEnabled(False)
-            self._ui.relativeScalar.setEnabled(False)
 
         if ModelsDB.isSpeciesModelOn():
             self._ui.discretizationSchemeSpecies.setEnabled(True)
@@ -427,8 +426,15 @@ class NumericalConditionsPage(ContentPage):
         return super().showEvent(ev)
 
     def _connectSignalsSlots(self):
+        Project.instance().solverStatusChanged.connect(self._updateEnabled)
+
         self._ui.advanced.clicked.connect(self._advancedSetup)
         self._ui.fluxType.currentDataChanged.connect(self._fluxTypeChanged)
+
+    def _updateEnabled(self):
+        caseManager = CaseManager()
+        self._ui.scrollArea.setEnabled(not caseManager.isBatchRunning())
+        self._ui.advanced.setEnabled(not caseManager.isBatchRunning())
 
     def _advancedSetup(self):
         self._dialog = AdvancedDialog(self)

@@ -3,9 +3,11 @@
 
 import platform
 import re
-import subprocess
 from enum import IntEnum, auto
 from pathlib import Path
+
+import asyncio
+from libbaram.process import runExternalScript
 
 
 class ParallelType(IntEnum):
@@ -35,10 +37,11 @@ else:
     MINOR_VERSION = 1
 
 
-def checkMPI():
+async def checkMPI():
     try:
-        process = subprocess.Popen([MPICMD, VERSION_CHECK_OPTION], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
+        process = await runExternalScript(MPICMD, VERSION_CHECK_OPTION,
+                                          stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await process.communicate()
         m = re.search('([0-9]+)\.([0-9]+)\.', stdout.decode())
         major = int(m.group(1))
         minor = int(m.group(2))

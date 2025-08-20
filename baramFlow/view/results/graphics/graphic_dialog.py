@@ -98,12 +98,14 @@ class GraphicDialog(QDialog):
     def _connectSignalsSlots(self):
         self._ui.field.currentIndexChanged.connect(self._fieldChanged)
         self._ui.select.clicked.connect(self._selectClicked)
-        self._ui.ok.clicked.connect(self._okClicked)
+        self._ui.update.clicked.connect(self._updateClicked)
         self._ui.cancel.clicked.connect(self._cancelClicked)
 
     @qasync.asyncSlot()
-    async def _okClicked(self):
+    async def _updateClicked(self):
+        self._ui.update.setEnabled(False)
         if not await self._valid():
+            self._ui.update.setEnabled(True)
             return
 
         fieldValueNeedUpdate = False
@@ -126,6 +128,7 @@ class GraphicDialog(QDialog):
 
                 if rc != 0:
                     progressDialog.finish(self.tr('Calculation failed'))
+                    self._ui.update.setEnabled(True)
                     return
 
                 fieldValueNeedUpdate = True
@@ -189,6 +192,8 @@ class GraphicDialog(QDialog):
         self._graphic.rangeMin, self._graphic.rangeMax = self._graphic.getValueRange(self._graphic.useNodeValues, self._graphic.relevantScaffoldsOnly)
 
         progressDialog.close()
+
+        self._ui.update.setEnabled(True)
 
         super().accept()
 

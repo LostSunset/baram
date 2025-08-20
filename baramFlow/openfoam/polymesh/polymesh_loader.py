@@ -1,16 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 import logging
-import asyncio
 import re
-from pathlib import Path
 
 from PyFoam.RunDictionary.ParsedParameterFile import ParsedBoundaryDict
 from PySide6.QtCore import QObject, Signal
-from vtkmodules.vtkIOParallel import vtkPOpenFOAMReader
 from vtkmodules.vtkCommonDataModel import vtkCompositeDataSet
-from vtkmodules.vtkCommonCore import VTK_MULTIBLOCK_DATA_SET, VTK_UNSTRUCTURED_GRID, VTK_POLY_DATA, vtkCommand
+from vtkmodules.vtkCommonCore import VTK_MULTIBLOCK_DATA_SET, VTK_UNSTRUCTURED_GRID, VTK_POLY_DATA
 
 from baramFlow.base.graphic.graphics_db import GraphicsDB
 from baramFlow.base.scaffold.scaffolds_db import ScaffoldsDB
@@ -108,16 +104,19 @@ class PolyMeshLoader(QObject):
         self.progress.emit(self.tr("Loading Mesh..."))
         boundaries = self._loadBoundaries()
 
-        vtkMesh = await self._loadVtkMesh()
+        async with OpenFOAMReader() as reader:
+            await reader.setupReader()
+
+        vtkMesh = await self._getVtkMesh()
         updated = self._updateDB(vtkMesh, boundaries)
-        await self._updateVtkMesh(vtkMesh)
+        await self._updateMeshModel(vtkMesh)
         if updated:
             app.updateMesh()
 
     async def loadVtk(self):
         self.progress.emit(self.tr("Loading Mesh..."))
-        vtkMesh = await self._loadVtkMesh()
-        await self._updateVtkMesh(vtkMesh)
+        vtkMesh = await self._getVtkMesh()
+        await self._updateMeshModel(vtkMesh)
 
     def _loadBoundaries(self):
         boundaries = {}
@@ -135,10 +134,7 @@ class PolyMeshLoader(QObject):
 
         return boundaries
 
-    async def _loadVtkMesh(self):
-        return await asyncio.to_thread(self._getVtkMesh, FileSystem.foamFilePath())
-
-    def _getVtkMesh(self, foamFilePath: Path):
+    async def _getVtkMesh(self):
         """
         VtkMesh dict
         {
@@ -158,35 +154,18 @@ class PolyMeshLoader(QObject):
             ...
         }
         """
-        def readerProgressEvent(caller: vtkPOpenFOAMReader, ev):
-            self.progress.emit(self.tr('Loading Mesh : ') + f'{int(float(caller.GetProgress()) * 100)}%')
+        def readerProgressEvent(progress: int):
+            self.progress.emit(self.tr('Loading Mesh : ') + str(progress) +'%')
 
-        r = vtkPOpenFOAMReader()
-        r.SetCaseType(
-            vtkPOpenFOAMReader.DECOMPOSED_CASE if FileSystem.processorPath(0) else vtkPOpenFOAMReader.RECONSTRUCTED_CASE)
-        r.SetFileName(str(foamFilePath))
-        r.EnableAllCellArrays()
-        r.EnableAllPointArrays()
-        r.EnableAllPatchArrays()
-        r.EnableAllLagrangianArrays()
-        r.CreateCellToPointOn()
-        r.CacheMeshOn()
-        r.ReadZonesOn()
+        async with OpenFOAMReader() as reader:
+            await reader.refresh()
+            reader.setTimeValue(0)
+            reader.readerProgressEvent.connect(readerProgressEvent)
+            await reader.update()
+            reader.readerProgressEvent.disconnect(readerProgressEvent)  # This has side effect of clearing all calls that have not been called yet.
+            output = reader.getOutput()
 
-        r.UpdateInformation()
-
-        for i in range(r.GetNumberOfPatchArrays()):
-            name = r.GetPatchArrayName(i)
-            m = re.search(r'patch/', name)
-            if m is not None:
-                r.SetPatchArrayStatus(name, 1)
-
-        r.AddObserver(vtkCommand.ProgressEvent, readerProgressEvent)
-
-        r.Update()
-
-        vtkMesh = build(r.GetOutput())
-
+        vtkMesh = build(output)
         if 'boundary' in vtkMesh:  # single region mesh
             vtkMesh = {'': vtkMesh}
 
@@ -278,15 +257,15 @@ class PolyMeshLoader(QObject):
 
         return True
 
-    async def _updateVtkMesh(self, vtkMesh):
+    async def _updateMeshModel(self, vtkMesh):
         db = coredb.CoreDB()
 
-        viewModel = MeshModel()
+        meshModel = MeshModel()
         cellZones = {}
         internalMeshes = {}
         for rname in db.getRegions():
             for bcid, bcname, _ in db.getBoundaryConditions(rname):
-                viewModel.setActorInfo(bcid, vtkMesh[rname]['boundary'][bcname])
+                meshModel.setActorInfo(bcid, vtkMesh[rname]['boundary'][bcname])
 
             for czid, czname in db.getCellZones(rname):
                 if not CellZoneDB.isRegion(czname):
@@ -294,10 +273,7 @@ class PolyMeshLoader(QObject):
 
             internalMeshes[rname] = vtkMesh[rname]['internalMesh']
 
-        app.updateVtk(viewModel, cellZones, internalMeshes)
-
-        async with OpenFOAMReader() as reader:
-            await reader.setupReader()
+        app.updateMeshModel(meshModel, cellZones, internalMeshes)
 
         ScaffoldsDB().rematchBoundaries()
 

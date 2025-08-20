@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
 import asyncio
 import logging
 import os
+import webbrowser
 
 import qasync
 from filelock import Timeout
@@ -13,7 +15,7 @@ from PySide6.QtWidgets import QMainWindow, QFileDialog, QMessageBox, QVBoxLayout
 from PySide6.QtCore import Signal, QEvent, QMargins
 from PySide6QtAds import CDockManager, DockWidgetArea
 
-from libbaram.simple_db.simple_schema import DBError
+from libbaram.validation import ValidationError
 from libbaram.utils import getFit
 from widgets.async_message_box import AsyncMessageBox
 from widgets.new_project_dialog import NewProjectDialog
@@ -164,6 +166,7 @@ class MainWindow(QMainWindow):
         self._ui.actionScale.triggered.connect(self._actionScale)
         self._ui.actionLanguage.triggered.connect(self._actionLanguage)
         self._ui.actionAbout.triggered.connect(self._actionAbout)
+        self._ui.actionTutorials.triggered.connect(self._openTutorials)
 
         self._recentFilesMenu.projectSelected.connect(self._openRecent)
 
@@ -222,6 +225,8 @@ class MainWindow(QMainWindow):
 
     def _openParallelEnvironmentDialog(self):
         self._dialog = ParallelEnvironmentDialog(self, app.project.parallelEnvironment())
+        if app.fileSystem.timePathExists(1, app.project.parallelCores() > 1):
+            self._dialog.setReadOnly()
         self._dialog.accepted.connect(self._updateParallelEnvironment)
         self._dialog.open()
 
@@ -237,6 +242,9 @@ class MainWindow(QMainWindow):
     def _actionAbout(self):
         self._dialog = AboutDialog(self)
         self._dialog.open()
+
+    def _openTutorials(self):
+        webbrowser.open('https://baramcfd.org/en/tutorial/baram-mesh/tutorial-mesh-dashboard-en/')
 
     @qasync.asyncSlot()
     async def _createProject(self):
@@ -262,7 +270,7 @@ class MainWindow(QMainWindow):
         except Timeout:
             await AsyncMessageBox().information(self, self.tr('Project Open Error'),
                                     self.tr(f'{path.name} is already open in another program.'))
-        except DBError as e:
+        except ValidationError as e:
             await AsyncMessageBox().information(self, self.tr('Project Open Error'),
                                                 self.tr(f'configurations error : {e.path} - {e.name}'))
 

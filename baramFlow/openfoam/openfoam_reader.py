@@ -20,7 +20,7 @@ _mutex = Lock()
 
 
 class OpenFOAMReader(QObject):
-    _vtkReaderProgress = Signal(str)
+    readerProgressEvent = Signal(int)
 
     def __new__(cls, *args, **kwargs):
         with _mutex:
@@ -39,6 +39,7 @@ class OpenFOAMReader(QObject):
         super().__init__()
 
         self._acquired = False
+        self._readerSetUpOnEnter = False
 
         self._reader: Optional[vtkPOpenFOAMReader] = None
 
@@ -49,6 +50,7 @@ class OpenFOAMReader(QObject):
 
         if self._reader is None:
             await self.setupReader()
+            self._readerSetUpOnEnter = True
 
         return self
 
@@ -56,6 +58,7 @@ class OpenFOAMReader(QObject):
         _mutex.release()
 
         self._acquired = False
+        self._readerSetUpOnEnter = False
 
         logger.debug('exit without error')
         return None
@@ -74,6 +77,10 @@ class OpenFOAMReader(QObject):
         if caseRoot is None:
             return
 
+        if self._readerSetUpOnEnter:
+            return
+
+        self._caseRoot = caseRoot
         self._reader = vtkPOpenFOAMReader()
 
         self._reader.EnableAllCellArrays()
@@ -111,7 +118,7 @@ class OpenFOAMReader(QObject):
         await vtk_run_in_thread(self._reader.Update)
 
     def _readerProgressEvent(self, caller: vtkPOpenFOAMReader, ev):
-        self._vtkReaderProgress.emit(self.tr('Loading Mesh : ') + f'{int(float(caller.GetProgress()) * 100)}%')
+        self.readerProgressEvent.emit(int(float(caller.GetProgress()) * 100))
 
     def setTimeValue(self, value: float):
         if not self._acquired:
@@ -119,11 +126,10 @@ class OpenFOAMReader(QObject):
 
         time = self._reader.GetTimeValue()
         print(f'read {time} set {value}')
-        if time == value:
-            return
 
         self._reader.SetTimeValue(value)
-        self._reader.Modified()
+        if time != value:
+            self._reader.Modified()
 
     def getTimeValue(self):
         if not self._acquired:

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import qasync
 from PySide6.QtGui import QIntValidator
-from PySide6.QtWidgets import QApplication
 from vtkmodules.vtkCommonDataModel import vtkPlane
 from vtkmodules.vtkFiltersCore import vtkAppendPolyData, vtkCleanPolyData, vtkFeatureEdges, vtkPolyDataPlaneCutter, \
     vtkTriangleFilter
@@ -14,13 +13,14 @@ from vtkmodules.vtkIOGeometry import vtkSTLWriter, vtkOBJWriter
 from libbaram.exception import CanceledException
 from libbaram.process import ProcessError
 from libbaram.run import RunParallelUtility
-from libbaram.simple_db.simple_schema import DBError
+from libbaram.validation import ValidationError
 from widgets.async_message_box import AsyncMessageBox
 from widgets.list_table import ListItemWithButtons
 from widgets.progress_dialog import ProgressDialog
 
 from baramMesh.app import app
 from baramMesh.db.configurations_schema import GeometryType, Shape, CFDType
+from baramMesh.db.configurations import defaultsDB
 from baramMesh.openfoam.system.snappy_hex_mesh_dict import SnappyHexMeshDict
 from baramMesh.view.main_window.main_window_ui import Ui_MainWindow
 from baramMesh.view.step_page import StepPage
@@ -144,11 +144,12 @@ class CastellationPage(StepPage):
             self._db = app.db.checkout()
 
             return True
-        except DBError as e:
+        except ValidationError as e:
             await AsyncMessageBox().information(self._widget, self.tr('Input Error'), e.toMessage())
             return False
 
     def _connectSignalsSlots(self):
+        self._ui.loadCastellationDefaults.clicked.connect(self._loadDefaults)
         self._ui.surfaceRefinementAdd.clicked.connect(lambda: self._openSurfaceRefinementDialog())
         self._ui.volumeRefinementAdd.clicked.connect(lambda: self._openVolumeRefinementDialog())
         self._ui.refine.clicked.connect(self._refine)
@@ -158,16 +159,7 @@ class CastellationPage(StepPage):
         self._db = app.db.checkout()
 
         castellation = self._db.getElement('castellation')
-        self._ui.nCellsBetweenLevels.setText(castellation.value('nCellsBetweenLevels'))
-        self._ui.resolveFeatureAngle.setText(castellation.value('resolveFeatureAngle'))
-        self._ui.keepNonManifoldEdges.setChecked(castellation.value('vtkNonManifoldEdges'))
-        self._ui.keepOpenEdges.setChecked(castellation.value('vtkBoundaryEdges'))
-
-        self._ui.maxGlobalCells.setText(castellation.value('maxGlobalCells'))
-        self._ui.maxLocalCells.setText(castellation.value('maxLocalCells'))
-        self._ui.minRefinementCells.setText(castellation.value('minRefinementCells'))
-        self._ui.maxLoadUnbalance.setText(castellation.value('maxLoadUnbalance'))
-        self._ui.allowFreeStandingZoneFaces.setChecked(castellation.value('allowFreeStandingZoneFaces'))
+        self._setConfigurastions(castellation)
 
         self._ui.surfaceRefinement.clear()
         self._ui.volumeRefinement.clear()
@@ -195,6 +187,26 @@ class CastellationPage(StepPage):
 
         self._loaded = True
         self._updateControlButtons()
+
+    @qasync.asyncSlot()
+    async def _loadDefaults(self):
+        if await AsyncMessageBox().confirm(
+                self._widget, self.tr('Reset Settings'),
+                self.tr(
+                    'Would you like to reset all Castallation settings to default, excluding the Refinement Groups?')):
+            self._setConfigurastions(defaultsDB.getElement('castellation'))
+
+    def _setConfigurastions(self, castellation):
+        self._ui.nCellsBetweenLevels.setText(castellation.value('nCellsBetweenLevels'))
+        self._ui.resolveFeatureAngle.setText(castellation.value('resolveFeatureAngle'))
+        self._ui.keepNonManifoldEdges.setChecked(castellation.value('vtkNonManifoldEdges'))
+        self._ui.keepOpenEdges.setChecked(castellation.value('vtkBoundaryEdges'))
+
+        self._ui.maxGlobalCells.setText(castellation.value('maxGlobalCells'))
+        self._ui.maxLocalCells.setText(castellation.value('maxLocalCells'))
+        self._ui.minRefinementCells.setText(castellation.value('minRefinementCells'))
+        self._ui.maxLoadUnbalance.setText(castellation.value('maxLoadUnbalance'))
+        self._ui.allowFreeStandingZoneFaces.setChecked(castellation.value('allowFreeStandingZoneFaces'))
 
     def _openSurfaceRefinementDialog(self, groupId=None):
         self._dialog = SurfaceRefinementDialog(self._widget, self._db, groupId)
@@ -396,6 +408,7 @@ class CastellationPage(StepPage):
         self._ui.castellationButtons.setEnabled(False)
 
     def _enableEdit(self):
+        self._ui.loadCastellationDefaults.setEnabled(True)
         self._ui.castellationConfiguration.setEnabled(True)
         self._ui.castellationAdvanced.setEnabled(True)
         self._ui.surfaceRefinementAdd.setEnabled(True)
@@ -404,6 +417,7 @@ class CastellationPage(StepPage):
         self._ui.volumeRefinement.enableEdit()
 
     def _disableEdit(self):
+        self._ui.loadCastellationDefaults.setEnabled(False)
         self._ui.castellationConfiguration.setEnabled(False)
         self._ui.castellationAdvanced.setEnabled(False)
         self._ui.surfaceRefinementAdd.setEnabled(False)

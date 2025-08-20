@@ -8,6 +8,7 @@ from typing import Optional
 import qasync
 from PySide6.QtWidgets import QSizePolicy, QRadioButton, QGridLayout, QLabel, QCheckBox, QLineEdit, QGroupBox
 
+from baramFlow.case_manager import CaseManager
 from baramFlow.coredb.material_db import MaterialDB
 from widgets.async_message_box import AsyncMessageBox
 
@@ -91,6 +92,10 @@ class SectionDialog(ResizableDialog):
         self._volumeFractionWidget = None
         self._scalarsWidget = None
         self._speciesWidget = None
+
+        if CaseManager().isActive():
+            self._ui.editForm.setEnabled(False)
+            self._ui.ok.setEnabled(False)
 
         self._connectSignalsToSlots()
 
